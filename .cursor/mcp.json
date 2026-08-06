@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "framekit": {
+      "command": "npx",
+      "args": ["tsx", "mcp/src/index.ts"],
+      "cwd": "/Users/georgenizoridis/Documents/Development Projects/Photo-Editor"
+    }
+  }
+}
