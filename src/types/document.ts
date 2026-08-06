@@ -132,15 +132,27 @@ export interface BackgroundLayer extends BaseLayer {
 
 export type Layer = ImageLayer | TextLayer | BackgroundLayer;
 
+/** One still in the animation strip — full layer snapshot */
+export interface AnimFrame {
+  id: string;
+  layers: Layer[];
+}
+
 export interface DocumentState {
   id: string;
   name: string;
   width: number;
   height: number;
   transparent: boolean;
+  /** Live edit buffer — always mirrors frames[activeFrameIndex].layers */
   layers: Layer[];
   selectedLayerId: string | null;
   showSafeGuides: boolean;
+  /** Ordered frames for animation; length >= 1 */
+  frames: AnimFrame[];
+  activeFrameIndex: number;
+  /** Playback / export frame rate */
+  fps: number;
 }
 
 export interface BrandKit {

@@ -9,6 +9,8 @@ npm install
 npm run dev
 ```
 
+Open the printed localhost URL. Start a **YouTube Thumbnail** or **Title Card**, then use the filmstrip under the canvas to add frames, scrub with ←/→, play with Space, and export an animated **GIF**.
+
 Open http://localhost:5173.
 
 ## MCP server (LLM control)

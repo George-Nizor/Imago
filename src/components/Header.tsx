@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import { useEditorStore, getSelectedLayer } from '../store/editorStore';
 import { useBrandStore } from '../store/brandStore';
 import { usePrefsStore } from '../store/prefsStore';
-import { exportDocument } from '../lib/export';
+import { exportDocument, exportAnimatedGif, exportFramePngs } from '../lib/export';
 import { removeBackgroundFromSrc, ensureCutoutModel } from '../lib/cutout';
 import { applyBeautyPass } from '../lib/beauty';
 import { loadImage } from '../lib/imageUtils';
@@ -81,6 +81,32 @@ export function Header() {
     }
   };
 
+  const onExportGif = async () => {
+    useEditorStore.getState().setPlaying(false);
+    useEditorStore.getState().setBusy('Exporting GIF…');
+    try {
+      await exportAnimatedGif(doc);
+    } catch (e) {
+      console.error(e);
+      alert('GIF export failed');
+    } finally {
+      useEditorStore.getState().setBusy(null);
+    }
+  };
+
+  const onExportFrames = async () => {
+    useEditorStore.getState().setPlaying(false);
+    useEditorStore.getState().setBusy('Exporting frames…');
+    try {
+      await exportFramePngs(doc);
+    } catch (e) {
+      console.error(e);
+      alert('Frame export failed');
+    } finally {
+      useEditorStore.getState().setBusy(null);
+    }
+  };
+
   return (
     <header className="header">
       <div className="header-left">
@@ -125,6 +151,24 @@ export function Header() {
         </button>
         <button type="button" className="ghost" onClick={() => onExport('png')}>
           PNG
+        </button>
+        <button
+          type="button"
+          className="accent"
+          title="Export all frames as animated GIF"
+          onClick={onExportGif}
+          disabled={doc.frames.length < 1}
+        >
+          GIF
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          title="Download each frame as PNG"
+          onClick={onExportFrames}
+          disabled={doc.frames.length < 2}
+        >
+          Frames
         </button>
       </div>
 

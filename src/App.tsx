@@ -3,6 +3,7 @@ import { StartScreen } from './components/StartScreen';
 import { Header } from './components/Header';
 import { Toolbar } from './components/Toolbar';
 import { CanvasStage } from './components/CanvasStage';
+import { Filmstrip } from './components/Filmstrip';
 import { LayersPanel } from './components/LayersPanel';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { useEditorStore } from './store/editorStore';
@@ -48,7 +49,10 @@ export default function App() {
       <Header />
       <div className="workspace">
         <Toolbar />
-        <CanvasStage />
+        <div className="stage-column">
+          <CanvasStage />
+          <Filmstrip />
+        </div>
         <aside className="right-rail">
           <LayersPanel />
           <PropertiesPanel />

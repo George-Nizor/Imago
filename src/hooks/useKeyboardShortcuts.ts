@@ -64,6 +64,18 @@ export function useKeyboardShortcuts() {
           if (id) useEditorStore.getState().deleteLayer(id);
           break;
         }
+        case 'arrowleft':
+          e.preventDefault();
+          useEditorStore.getState().stepFrame(-1);
+          break;
+        case 'arrowright':
+          e.preventDefault();
+          useEditorStore.getState().stepFrame(1);
+          break;
+        case ' ':
+          e.preventDefault();
+          useEditorStore.getState().setPlaying(!useEditorStore.getState().playing);
+          break;
         default:
           break;
       }

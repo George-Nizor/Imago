@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import {
   type BrandKit,
   type DocumentState,
+  type AnimFrame,
   type ImageLayer,
   type Layer,
   type LayerRole,
@@ -22,6 +23,7 @@ import { centerTransform, fileToDataUrl, loadImage } from '../lib/imageUtils';
 import { applyTextPreset } from '../lib/textEffects';
 
 const MAX_HISTORY = 40;
+const MAX_FRAMES = 48;
 
 interface EditorStore {
   doc: DocumentState | null;
@@ -34,6 +36,7 @@ interface EditorStore {
   future: DocumentState[];
   stageScale: number;
   stagePos: { x: number; y: number };
+  playing: boolean;
 
   setTool: (t: Tool) => void;
   setBrushSize: (n: number) => void;
@@ -41,6 +44,7 @@ interface EditorStore {
   setEraseSoft: (v: boolean) => void;
   setBusy: (msg: string | null) => void;
   setStageView: (scale: number, pos: { x: number; y: number }) => void;
+  setPlaying: (v: boolean) => void;
 
   pushHistory: () => void;
   undo: () => void;
@@ -66,10 +70,38 @@ interface EditorStore {
 
   replaceImageSrc: (id: string, src: string, dims?: { w: number; h: number }) => void;
   applyBrandToDoc: (brand: BrandKit) => void;
+
+  selectFrame: (index: number) => void;
+  addFrame: () => void;
+  duplicateFrame: (index?: number) => void;
+  deleteFrame: (index?: number) => void;
+  moveFrame: (from: number, to: number) => void;
+  setFps: (fps: number) => void;
+  stepFrame: (delta: number) => void;
 }
 
 function cloneDoc(doc: DocumentState): DocumentState {
   return structuredClone(doc);
+}
+
+/** Write layers into the active frame slot and return updated doc. */
+function withLayers(
+  doc: DocumentState,
+  layers: Layer[],
+  extra: Partial<DocumentState> = {},
+): DocumentState {
+  const idx = Math.max(0, Math.min(doc.activeFrameIndex, Math.max(0, doc.frames.length - 1)));
+  const frames =
+    doc.frames.length === 0
+      ? [{ id: uid('frm'), layers: structuredClone(layers) }]
+      : doc.frames.map((f, i) => (i === idx ? { ...f, layers: structuredClone(layers) } : f));
+  return {
+    ...doc,
+    ...extra,
+    layers,
+    frames,
+    activeFrameIndex: Math.min(idx, frames.length - 1),
+  };
 }
 
 function makeBackground(
@@ -104,6 +136,7 @@ function emptyDoc(
   transparent: boolean,
   layers: Layer[],
 ): DocumentState {
+  const frame: AnimFrame = { id: uid('frm'), layers: structuredClone(layers) };
   return {
     id: uid('doc'),
     name,
@@ -113,6 +146,9 @@ function emptyDoc(
     layers,
     selectedLayerId: layers[layers.length - 1]?.id ?? null,
     showSafeGuides: !transparent && width === 1280,
+    frames: [frame],
+    activeFrameIndex: 0,
+    fps: 8,
   };
 }
 
@@ -127,6 +163,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   future: [],
   stageScale: 0.55,
   stagePos: { x: 40, y: 40 },
+  playing: false,
 
   setTool: (t) => set({ tool: t }),
   setBrushSize: (n) => set({ brushSize: n }),
@@ -134,6 +171,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setEraseSoft: (v) => set({ eraseSoft: v }),
   setBusy: (msg) => set({ busy: msg }),
   setStageView: (scale, pos) => set({ stageScale: scale, stagePos: pos }),
+  setPlaying: (v) => set({ playing: v }),
 
   pushHistory: () => {
     const { doc, past } = get();
@@ -152,6 +190,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       past: past.slice(0, -1),
       future: [cloneDoc(doc), ...future].slice(0, MAX_HISTORY),
       doc: prev,
+      playing: false,
     });
   },
 
@@ -163,6 +202,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       future: future.slice(1),
       past: [...past, cloneDoc(doc)].slice(-MAX_HISTORY),
       doc: next,
+      playing: false,
     });
   },
 
@@ -196,7 +236,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     };
     const text: TextLayer = {
       ...textBase,
-      ...applyTextPreset(brand.defaultTextEffect === 'editorial' ? 'yt-bold' : (brand.defaultTextEffect ?? 'yt-bold'), textBase),
+      ...applyTextPreset(
+        brand.defaultTextEffect === 'editorial' ? 'yt-bold' : (brand.defaultTextEffect ?? 'yt-bold'),
+        textBase,
+      ),
       effect: brand.defaultTextEffect === 'editorial' ? 'yt-bold' : (brand.defaultTextEffect ?? 'yt-bold'),
     };
     set({
@@ -206,6 +249,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       tool: 'select',
       stageScale: 0.55,
       stagePos: { x: 40, y: 40 },
+      playing: false,
     });
   },
 
@@ -248,10 +292,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       tool: 'text',
       stageScale: 0.4,
       stagePos: { x: 40, y: 40 },
+      playing: false,
     });
   },
 
-  closeDoc: () => set({ doc: null, past: [], future: [] }),
+  closeDoc: () => set({ doc: null, past: [], future: [], playing: false }),
   setDocName: (name) => {
     const { doc } = get();
     if (!doc) return;
@@ -267,12 +312,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   updateLayer: (id, patch) => {
     const { doc } = get();
     if (!doc) return;
-    set({
-      doc: {
-        ...doc,
-        layers: doc.layers.map((l) => (l.id === id ? ({ ...l, ...patch } as Layer) : l)),
-      },
-    });
+    const layers = doc.layers.map((l) => (l.id === id ? ({ ...l, ...patch } as Layer) : l));
+    set({ doc: withLayers(doc, layers) });
   },
 
   setLayerRole: (id, role) => {
@@ -287,7 +328,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const layers = [...doc.layers];
     const [item] = layers.splice(from, 1);
     layers.splice(to, 0, item);
-    set({ doc: { ...doc, layers } });
+    set({ doc: withLayers(doc, layers) });
   },
 
   deleteLayer: (id) => {
@@ -296,12 +337,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     get().pushHistory();
     const layers = doc.layers.filter((l) => l.id !== id);
     set({
-      doc: {
-        ...doc,
-        layers,
+      doc: withLayers(doc, layers, {
         selectedLayerId:
           doc.selectedLayerId === id ? layers[layers.length - 1]?.id ?? null : doc.selectedLayerId,
-      },
+      }),
     });
   },
 
@@ -320,7 +359,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const idx = doc.layers.findIndex((l) => l.id === id);
     const layers = [...doc.layers];
     layers.splice(idx + 1, 0, copy);
-    set({ doc: { ...doc, layers, selectedLayerId: copy.id } });
+    set({ doc: withLayers(doc, layers, { selectedLayerId: copy.id }) });
   },
 
   toggleVisibility: (id) => {
@@ -343,7 +382,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       img.naturalHeight,
       doc.width,
       doc.height,
-      isSubject ? 'fit' : 'fit',
+      'fit',
     );
     if (!isSubject) {
       transform.scaleX *= 0.45;
@@ -380,12 +419,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       beauty: { ...DEFAULT_BEAUTY },
     };
 
-    // Insert above background, below text
     const layers = [...doc.layers];
     const textIdx = layers.findIndex((l) => l.role === 'text');
     const insertAt = textIdx >= 0 ? textIdx : layers.length;
     layers.splice(insertAt, 0, layer);
-    set({ doc: { ...doc, layers, selectedLayerId: layer.id } });
+    set({ doc: withLayers(doc, layers, { selectedLayerId: layer.id }) });
     return layer.id;
   },
 
@@ -423,11 +461,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       effect: brand.defaultTextEffect ?? 'basic',
     };
     set({
-      doc: {
-        ...doc,
-        layers: [...doc.layers, layer],
-        selectedLayerId: layer.id,
-      },
+      doc: withLayers(doc, [...doc.layers, layer], { selectedLayerId: layer.id }),
       tool: 'text',
     });
     return layer.id;
@@ -450,11 +484,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         src: renderBackground(doc.width, doc.height, v, brand.primary, brand.accent, seed),
       };
     });
-    // If no background, add one at bottom
     if (!layers.some((l) => l.type === 'background') && !doc.transparent) {
       layers.unshift(makeBackground(doc.width, doc.height, brand, variant ?? 'panels'));
     }
-    set({ doc: { ...doc, layers } });
+    set({ doc: withLayers(doc, layers) });
   },
 
   setBackgroundVariant: (variant, brand) => {
@@ -464,20 +497,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   replaceImageSrc: (id, src, dims) => {
     const { doc } = get();
     if (!doc) return;
-    set({
-      doc: {
-        ...doc,
-        layers: doc.layers.map((l) => {
-          if (l.id !== id || l.type !== 'image') return l;
-          return {
-            ...l,
-            src,
-            naturalWidth: dims?.w ?? l.naturalWidth,
-            naturalHeight: dims?.h ?? l.naturalHeight,
-          };
-        }),
-      },
+    const layers = doc.layers.map((l) => {
+      if (l.id !== id || l.type !== 'image') return l;
+      return {
+        ...l,
+        src,
+        naturalWidth: dims?.w ?? l.naturalWidth,
+        naturalHeight: dims?.h ?? l.naturalHeight,
+      };
     });
+    set({ doc: withLayers(doc, layers) });
   },
 
   applyBrandToDoc: (brand) => {
@@ -492,7 +521,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           fontWeight: brand.fontWeight,
           fill: brand.textFill,
           stroke: brand.textStroke,
-          strokeWidth: l.name === 'Title' ? brand.textStrokeWidth : Math.max(2, brand.textStrokeWidth / 2),
+          strokeWidth:
+            l.name === 'Title' ? brand.textStrokeWidth : Math.max(2, brand.textStrokeWidth / 2),
           shadowColor: brand.shadowColor,
           shadowBlur: brand.shadowBlur,
           fontSize: l.name === 'Title' ? brand.titleSize : l.fontSize,
@@ -518,7 +548,116 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       }
       return l;
     });
-    set({ doc: { ...doc, layers } });
+    set({ doc: withLayers(doc, layers) });
+  },
+
+  selectFrame: (index) => {
+    const { doc } = get();
+    if (!doc || doc.frames.length === 0) return;
+    const i = Math.max(0, Math.min(index, doc.frames.length - 1));
+    if (i === doc.activeFrameIndex) return;
+    const flushed = withLayers(doc, doc.layers);
+    const layers = structuredClone(flushed.frames[i].layers);
+    set({
+      doc: {
+        ...flushed,
+        layers,
+        activeFrameIndex: i,
+        selectedLayerId: layers[layers.length - 1]?.id ?? null,
+      },
+    });
+  },
+
+  addFrame: () => {
+    get().duplicateFrame();
+  },
+
+  duplicateFrame: (index) => {
+    const { doc } = get();
+    if (!doc) return;
+    if (doc.frames.length >= MAX_FRAMES) {
+      alert(`Max ${MAX_FRAMES} frames`);
+      return;
+    }
+    get().pushHistory();
+    const flushed = withLayers(doc, doc.layers);
+    const srcIdx = index ?? flushed.activeFrameIndex;
+    const source = flushed.frames[srcIdx];
+    const copy: AnimFrame = {
+      id: uid('frm'),
+      layers: structuredClone(source.layers),
+    };
+    const frames = [...flushed.frames];
+    frames.splice(srcIdx + 1, 0, copy);
+    set({
+      doc: {
+        ...flushed,
+        frames,
+        activeFrameIndex: srcIdx + 1,
+        layers: structuredClone(copy.layers),
+        selectedLayerId: copy.layers[copy.layers.length - 1]?.id ?? null,
+      },
+      playing: false,
+    });
+  },
+
+  deleteFrame: (index) => {
+    const { doc } = get();
+    if (!doc || doc.frames.length <= 1) return;
+    get().pushHistory();
+    const flushed = withLayers(doc, doc.layers);
+    const removeAt = index ?? flushed.activeFrameIndex;
+    const frames = flushed.frames.filter((_, i) => i !== removeAt);
+    const nextIdx = Math.min(removeAt, frames.length - 1);
+    set({
+      doc: {
+        ...flushed,
+        frames,
+        activeFrameIndex: nextIdx,
+        layers: structuredClone(frames[nextIdx].layers),
+        selectedLayerId: frames[nextIdx].layers[frames[nextIdx].layers.length - 1]?.id ?? null,
+      },
+      playing: false,
+    });
+  },
+
+  moveFrame: (from, to) => {
+    const { doc } = get();
+    if (!doc) return;
+    if (from === to || from < 0 || to < 0 || from >= doc.frames.length || to >= doc.frames.length) {
+      return;
+    }
+    get().pushHistory();
+    const flushed = withLayers(doc, doc.layers);
+    const frames = [...flushed.frames];
+    const [item] = frames.splice(from, 1);
+    frames.splice(to, 0, item);
+    let active = flushed.activeFrameIndex;
+    if (active === from) active = to;
+    else if (from < active && to >= active) active -= 1;
+    else if (from > active && to <= active) active += 1;
+    set({
+      doc: {
+        ...flushed,
+        frames,
+        activeFrameIndex: active,
+        layers: structuredClone(frames[active].layers),
+      },
+      playing: false,
+    });
+  },
+
+  setFps: (fps) => {
+    const { doc } = get();
+    if (!doc) return;
+    set({ doc: { ...doc, fps: Math.max(1, Math.min(30, Math.round(fps))) } });
+  },
+
+  stepFrame: (delta) => {
+    const { doc } = get();
+    if (!doc || doc.frames.length === 0) return;
+    const next = (doc.activeFrameIndex + delta + doc.frames.length) % doc.frames.length;
+    get().selectFrame(next);
   },
 }));
 
