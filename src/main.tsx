@@ -17,10 +17,13 @@ import '@fontsource/anton/400.css';
 import '@fontsource/rubik/700.css';
 import '@fontsource/dm-serif-display/400.css';
 import App from './App';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import './styles.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
   </StrictMode>,
 );

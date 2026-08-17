@@ -1,5 +1,20 @@
 export type LayerRole = 'background' | 'subject' | 'support' | 'text' | 'none';
 export type BlendMode = 'normal' | 'multiply';
+export type SlotKind = 'background' | 'subject' | 'support' | 'title';
+export type SlotFit = 'contain' | 'cover';
+
+export interface SlotMeta {
+  id: string;
+  label: string;
+  kind: SlotKind;
+  fit: SlotFit;
+  /** Resolution-independent template bounds, expressed from 0..1. */
+  box: { x: number; y: number; width: number; height: number };
+  /** Current document width used to turn normalized title bounds into pixels. */
+  canvasWidth?: number;
+  cutout?: boolean;
+  outline?: boolean;
+}
 export type Tool =
   | 'select'
   | 'transform'
@@ -76,6 +91,12 @@ export interface BaseLayer {
   opacity: number;
   locked: boolean;
   blendMode: BlendMode;
+  /** Present when this layer can be replaced without changing template geometry. */
+  slot?: SlotMeta;
+}
+
+export interface SlotLayer extends BaseLayer {
+  type: 'slot';
 }
 
 export interface ImageLayer extends BaseLayer {
@@ -130,7 +151,7 @@ export interface BackgroundLayer extends BaseLayer {
   src: string;
 }
 
-export type Layer = ImageLayer | TextLayer | BackgroundLayer;
+export type Layer = ImageLayer | TextLayer | BackgroundLayer | SlotLayer;
 
 /** One still in the animation strip — full layer snapshot */
 export interface AnimFrame {
@@ -153,6 +174,8 @@ export interface DocumentState {
   activeFrameIndex: number;
   /** Playback / export frame rate */
   fps: number;
+  templateId?: string;
+  templateName?: string;
 }
 
 export interface BrandKit {
@@ -173,10 +196,10 @@ export interface BrandKit {
 }
 
 export const DEFAULT_BRAND_KIT: BrandKit = {
-  primary: '#1c1914',
-  accent: '#d4a017',
-  textFill: '#f4efe4',
-  textStroke: '#0a0908',
+  primary: '#18121f',
+  accent: '#729488',
+  textFill: '#f0ede6',
+  textStroke: '#0e0b13',
   textStrokeWidth: 10,
   shadowColor: 'rgba(0,0,0,0.7)',
   shadowBlur: 16,
@@ -184,7 +207,7 @@ export const DEFAULT_BRAND_KIT: BrandKit = {
   fontWeight: 400,
   titleSize: 100,
   subtitleSize: 48,
-  subjectOutlineColor: '#f4efe4',
+  subjectOutlineColor: '#f0ede6',
   subjectOutlineWidth: 14,
   defaultTextEffect: 'editorial',
 };
@@ -206,7 +229,7 @@ export const DEFAULT_BEAUTY: BeautySettings = {
 export const DEFAULT_OUTLINE: OutlineStyle = {
   enabled: false,
   width: 14,
-  color: '#f4efe4',
+  color: '#f0ede6',
 };
 
 export function createTransform(
@@ -236,8 +259,8 @@ export function defaultTextEffects(): Pick<
     extrudeAngle: 225,
     extrudeColor: '#1a1208',
     gradientFrom: '#fff6d8',
-    gradientTo: '#d4a017',
-    outerStroke: '#f4efe4',
+    gradientTo: '#b89c67',
+    outerStroke: '#f0ede6',
     outerStrokeWidth: 6,
     letterSpacing: 0,
     skewX: 0,

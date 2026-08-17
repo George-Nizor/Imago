@@ -1,4 +1,5 @@
 import type { TextEffect, TextLayer } from '../types/document';
+import { fitTitleFontSize } from './templates.js';
 
 export const TEXT_EFFECT_PRESETS: {
   id: TextEffect;
@@ -48,17 +49,42 @@ type TextDraw = Pick<
   | 'outerStrokeWidth'
   | 'letterSpacing'
   | 'skewX'
+  | 'slot'
 >;
 
+function effectiveTextLayer(ctx: CanvasRenderingContext2D, layer: TextDraw): TextDraw {
+  if (layer.slot?.kind !== 'title' || !layer.slot.canvasWidth) return layer;
+  ctx.font = `${layer.fontWeight} ${layer.fontSize}px ${layer.fontFamily}`;
+  const measuredWidth = ctx.measureText(layer.text || ' ').width;
+  const fontSize = fitTitleFontSize(
+    layer.fontSize,
+    layer.slot.box.width * layer.slot.canvasWidth * 0.96,
+    measuredWidth,
+  );
+  if (fontSize >= layer.fontSize) return layer;
+  const ratio = fontSize / layer.fontSize;
+  return {
+    ...layer,
+    fontSize,
+    strokeWidth: layer.strokeWidth * ratio,
+    shadowBlur: layer.shadowBlur * ratio,
+    shadowOffsetX: layer.shadowOffsetX * ratio,
+    shadowOffsetY: layer.shadowOffsetY * ratio,
+    extrudeDepth: layer.extrudeDepth * ratio,
+    outerStrokeWidth: layer.outerStrokeWidth * ratio,
+    letterSpacing: layer.letterSpacing * ratio,
+  };
+}
+
 function setupFont(ctx: CanvasRenderingContext2D, layer: TextDraw) {
+  if ('letterSpacing' in ctx) {
+    ctx.letterSpacing = `${layer.letterSpacing || 0}px`;
+  }
   ctx.font = `${layer.fontWeight} ${layer.fontSize}px ${layer.fontFamily}`;
   ctx.textAlign = layer.align;
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
   ctx.miterLimit = 2;
-  if ('letterSpacing' in ctx) {
-    ctx.letterSpacing = `${layer.letterSpacing || 0}px`;
-  }
 }
 
 function foilGradient(
@@ -91,16 +117,17 @@ function foilGradient(
 }
 
 function measure(ctx: CanvasRenderingContext2D, layer: TextDraw) {
-  setupFont(ctx, layer);
-  const metrics = ctx.measureText(layer.text || ' ');
-  const w = Math.max(metrics.width, layer.fontSize * 0.5);
-  const h = layer.fontSize * 1.35;
+  const effective = effectiveTextLayer(ctx, layer);
+  setupFont(ctx, effective);
+  const metrics = ctx.measureText(effective.text || ' ');
+  const w = Math.max(metrics.width, effective.fontSize * 0.5);
+  const h = effective.fontSize * 1.35;
   const pad =
     Math.max(
-      layer.strokeWidth,
-      layer.outerStrokeWidth,
-      layer.extrudeDepth,
-      layer.shadowBlur,
+      effective.strokeWidth,
+      effective.outerStrokeWidth,
+      effective.extrudeDepth,
+      effective.shadowBlur,
       24,
     ) + 20;
   return { w, h, pad };
@@ -171,6 +198,7 @@ export function paintTextEffect(
   x = 0,
   y = 0,
 ) {
+  layer = effectiveTextLayer(ctx, layer);
   setupFont(ctx, layer);
   ctx.save();
   if (layer.skewX) {
@@ -432,8 +460,8 @@ export function applyTextPreset(effect: TextEffect, layer: TextLayer): Partial<T
       return {
         effect,
         strokeWidth: Math.max(8, Math.round(layer.fontSize * 0.1)),
-        stroke: '#0a0908',
-        fill: '#f4efe4',
+        stroke: '#0e0b13',
+        fill: '#f0ede6',
         shadowBlur: 14,
         shadowOffsetX: 4,
         shadowOffsetY: 6,
@@ -444,8 +472,8 @@ export function applyTextPreset(effect: TextEffect, layer: TextLayer): Partial<T
       return {
         effect,
         strokeWidth: Math.max(6, Math.round(layer.fontSize * 0.08)),
-        stroke: '#0a0908',
-        outerStroke: '#f4efe4',
+        stroke: '#0e0b13',
+        outerStroke: '#f0ede6',
         outerStrokeWidth: Math.max(4, Math.round(layer.fontSize * 0.05)),
         fill: '#ffcc00',
         shadowBlur: 0,
@@ -473,7 +501,7 @@ export function applyTextPreset(effect: TextEffect, layer: TextLayer): Partial<T
       return {
         effect,
         gradientFrom: '#fff6d8',
-        gradientTo: '#d4a017',
+        gradientTo: '#729488',
         fill: '#ffe08a',
         stroke: '#1a1208',
         strokeWidth: Math.max(6, Math.round(layer.fontSize * 0.07)),
@@ -488,7 +516,7 @@ export function applyTextPreset(effect: TextEffect, layer: TextLayer): Partial<T
         gradientFrom: '#fff8e8',
         gradientTo: '#e0a800',
         fill: '#ffe566',
-        stroke: '#0a0908',
+        stroke: '#0e0b13',
         strokeWidth: Math.max(5, Math.round(layer.fontSize * 0.06)),
         shadowBlur: 8,
         skewX: -0.12,
@@ -505,8 +533,8 @@ export function applyTextPreset(effect: TextEffect, layer: TextLayer): Partial<T
     case 'stack-shadow':
       return {
         effect,
-        fill: '#f4efe4',
-        stroke: '#0a0908',
+        fill: '#f0ede6',
+        stroke: '#0e0b13',
         strokeWidth: Math.max(4, Math.round(layer.fontSize * 0.05)),
         shadowBlur: 0,
         extrudeDepth: 0,
@@ -536,7 +564,7 @@ export function applyTextPreset(effect: TextEffect, layer: TextLayer): Partial<T
     case 'soft-lume':
       return {
         effect,
-        fill: '#f4efe4',
+        fill: '#f0ede6',
         strokeWidth: 0,
         shadowBlur: 28,
         fontFamily: '"Cinzel", Georgia, serif',
@@ -544,7 +572,7 @@ export function applyTextPreset(effect: TextEffect, layer: TextLayer): Partial<T
     case 'film-credits':
       return {
         effect,
-        fill: '#d4a017',
+        fill: '#b89c67',
         strokeWidth: 0,
         shadowBlur: 0,
         fontFamily: '"Oswald", sans-serif',
@@ -561,7 +589,7 @@ export function applyTextPreset(effect: TextEffect, layer: TextLayer): Partial<T
     case 'ghost-overlap':
       return {
         effect,
-        fill: '#f4efe4',
+        fill: '#f0ede6',
         strokeWidth: 0,
         shadowBlur: 0,
         fontFamily: '"Bebas Neue", sans-serif',

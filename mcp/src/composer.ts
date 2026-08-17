@@ -1,17 +1,16 @@
 import { createCanvas, loadImage, type Image } from '@napi-rs/canvas';
 import sharp from 'sharp';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { renderBackgroundBuffer } from './backgrounds.js';
+import { ensureFontsRegistered } from './typography.js';
+import { ImagoInputError, readInputImage, resolveOutputPath, writeOutput } from './safety.js';
 import {
   type BackgroundVariant,
   type BrandKit,
   type TextEffect,
-  EXPORTS_DIR,
   ensureDirs,
   loadBrand,
-  slugify,
 } from './paths.js';
+import { THUMBNAIL_SIZES, type ThumbnailSizeId } from '../../src/lib/templates.js';
 
 export interface SupportPlacement {
   path: string;
@@ -31,6 +30,8 @@ export interface ThumbnailRequest {
   brand?: Partial<BrandKit>;
   textEffect?: TextEffect;
   openAfter?: boolean;
+  overwrite?: boolean;
+  sizeId?: ThumbnailSizeId;
 }
 
 export interface TitleCardRequest {
@@ -40,18 +41,19 @@ export interface TitleCardRequest {
   height?: number;
   outputName?: string;
   brand?: Partial<BrandKit>;
+  overwrite?: boolean;
 }
 
-async function maybeCutout(inputPath: string, enabled: boolean): Promise<Buffer> {
-  const input = await sharp(inputPath).ensureAlpha().png().toBuffer();
+async function maybeCutout(inputPath: string, enabled: boolean, allowFallback = true): Promise<Buffer> {
+  const input = (await readInputImage(inputPath)).buffer;
   if (!enabled) return input;
   try {
     const { removeBackground } = await import('@imgly/background-removal-node');
     const blob = await removeBackground(input);
     const ab = await blob.arrayBuffer();
     return Buffer.from(ab);
-  } catch (err) {
-    console.error('Cutout failed, using original:', err);
+  } catch {
+    if (!allowFallback) throw new ImagoInputError('Local background removal failed');
     return input;
   }
 }
@@ -116,6 +118,7 @@ async function drawStyledText(
   fontSize: number,
   effect: TextEffect = 'extrude-3d',
 ) {
+  ensureFontsRegistered();
   ctx.font = `${fontSize}px "${brand.fontFamily}", "Arial Black", sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -154,7 +157,7 @@ async function drawStyledText(
     return;
   }
 
-  if (brand.shadowBlur > 0 && effect !== 'neon') {
+  if (brand.shadowBlur > 0) {
     ctx.shadowColor = brand.shadowColor;
     ctx.shadowBlur = brand.shadowBlur;
     ctx.shadowOffsetX = 4;
@@ -166,11 +169,11 @@ async function drawStyledText(
 
   if (effect === 'comic') {
     ctx.lineWidth = strokeW + 12;
-    ctx.strokeStyle = '#f4efe4';
+    ctx.strokeStyle = '#f0ede6';
     ctx.strokeText(text, x, y);
   }
 
-  if (strokeW > 0 && effect !== 'neon') {
+  if (strokeW > 0) {
     ctx.lineWidth = strokeW;
     ctx.strokeStyle = brand.textStroke;
     ctx.strokeText(text, x, y);
@@ -210,9 +213,21 @@ export async function createYouTubeThumbnail(req: ThumbnailRequest): Promise<{
   height: number;
 }> {
   ensureDirs();
-  const brand = { ...loadBrand(), ...req.brand };
-  const width = 1280;
-  const height = 720;
+  const baseBrand = { ...loadBrand(), ...req.brand };
+  const size = THUMBNAIL_SIZES.find(
+    (candidate) => candidate.id === (req.sizeId ?? 'youtube-1080'),
+  );
+  if (!size) throw new ImagoInputError(`Unknown thumbnail size: ${req.sizeId}`);
+  const { width, height } = size;
+  const scale = height / 720;
+  const brand = {
+    ...baseBrand,
+    titleSize: baseBrand.titleSize * scale,
+    subtitleSize: baseBrand.subtitleSize * scale,
+    textStrokeWidth: baseBrand.textStrokeWidth * scale,
+    shadowBlur: baseBrand.shadowBlur * scale,
+    subjectOutlineWidth: baseBrand.subjectOutlineWidth * scale,
+  };
   const bgVariant = req.background ?? 'panels';
 
   const bg = renderBackgroundBuffer(width, height, bgVariant, brand, req.seed);
@@ -253,10 +268,9 @@ export async function createYouTubeThumbnail(req: ThumbnailRequest): Promise<{
     req.textEffect ?? 'extrude-3d',
   );
 
-  const name = slugify(req.outputName ?? req.title);
-  const outputPath = join(EXPORTS_DIR, `${name}.jpg`);
+  const outputPath = resolveOutputPath(req.outputName, req.title, 'jpg', req.overwrite);
   const jpg = await sharp(canvas.toBuffer('image/png')).jpeg({ quality: 92 }).toBuffer();
-  writeFileSync(outputPath, jpg);
+  writeOutput(outputPath, jpg, req.overwrite);
   return { outputPath, width, height };
 }
 
@@ -292,21 +306,20 @@ export async function createTitleCard(req: TitleCardRequest): Promise<{
       'yt-bold',
     );
   }
-  const name = slugify(req.outputName ?? req.title);
-  const outputPath = join(EXPORTS_DIR, `${name}.png`);
-  writeFileSync(outputPath, canvas.toBuffer('image/png'));
+  const outputPath = resolveOutputPath(req.outputName, req.title, 'png', req.overwrite);
+  writeOutput(outputPath, canvas.toBuffer('image/png'), req.overwrite);
   return { outputPath, width, height };
 }
 
 export async function removeBackgroundFile(
   inputPath: string,
   outputName?: string,
+  overwrite = false,
 ): Promise<string> {
   ensureDirs();
-  const buf = await maybeCutout(inputPath, true);
-  const name = slugify(outputName ?? 'cutout');
-  const outputPath = join(EXPORTS_DIR, `${name}.png`);
-  writeFileSync(outputPath, buf);
+  const buf = await maybeCutout(inputPath, true, false);
+  const outputPath = resolveOutputPath(outputName, 'cutout', 'png', overwrite);
+  writeOutput(outputPath, buf, overwrite);
   return outputPath;
 }
 

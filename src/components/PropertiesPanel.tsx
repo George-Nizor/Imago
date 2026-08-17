@@ -7,6 +7,7 @@ import { loadImage } from '../lib/imageUtils';
 import { bakeGrade } from '../lib/grade';
 import { TEXT_EFFECT_PRESETS, applyTextPreset } from '../lib/textEffects';
 import type { BackgroundVariantKind, ImageLayer, TextLayer } from '../types/document';
+import { makeErrorNotice, makeNotice, reportDiagnostic } from '../lib/diagnostics';
 
 export function PropertiesPanel() {
   const doc = useEditorStore((s) => s.doc);
@@ -183,7 +184,6 @@ function BeautyControls() {
         onClick={async () => {
           if (!layer || layer.type !== 'image') return;
           const store = useEditorStore.getState();
-          store.pushHistory();
           store.setBusy('Beauty pass…');
           try {
             const src = await applyBeautyPass(layer.src, {
@@ -191,10 +191,20 @@ function BeautyControls() {
               amount: prefs.beautyDefault,
             });
             const img = await loadImage(src);
+            const active = store.doc?.layers.find((candidate) => candidate.id === layer.id);
+            if (active?.type !== 'image' || active.src !== layer.src) {
+              URL.revokeObjectURL(src);
+              return;
+            }
+            store.pushHistory();
             store.replaceImageSrc(layer.id, src, {
               w: img.naturalWidth,
               h: img.naturalHeight,
             });
+            store.setNotice(makeNotice('success', 'Beauty pass applied.'));
+          } catch (cause) {
+            reportDiagnostic('beauty', cause);
+            store.setNotice(makeErrorNotice('beauty', 'Beauty pass failed.'));
           } finally {
             store.setBusy(null);
           }
@@ -312,11 +322,16 @@ function ImageProps({ layer }: { layer: ImageLayer }) {
         onClick={async () => {
           const grade = { brightness: 8, contrast: 18, saturation: 12 };
           const store = useEditorStore.getState();
-          store.pushHistory();
           store.setBusy('Applying grade…');
           try {
             const src = await bakeGrade(layer.src, grade);
             const img = await loadImage(src);
+            const active = store.doc?.layers.find((candidate) => candidate.id === layer.id);
+            if (active?.type !== 'image' || active.src !== layer.src) {
+              URL.revokeObjectURL(src);
+              return;
+            }
+            store.pushHistory();
             store.replaceImageSrc(layer.id, src, {
               w: img.naturalWidth,
               h: img.naturalHeight,
@@ -324,6 +339,10 @@ function ImageProps({ layer }: { layer: ImageLayer }) {
             store.updateLayer(layer.id, {
               grade: { brightness: 0, contrast: 0, saturation: 0 },
             });
+            store.setNotice(makeNotice('success', 'Punchy grade applied.'));
+          } catch (cause) {
+            reportDiagnostic('grade', cause);
+            store.setNotice(makeErrorNotice('grade', 'Image grade failed.'));
           } finally {
             store.setBusy(null);
           }

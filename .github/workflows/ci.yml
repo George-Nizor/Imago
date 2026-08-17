@@ -1,0 +1,32 @@
+name: imago
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mcp/package-lock.json
+      - name: Install editor dependencies
+        run: npm ci
+      - name: Install MCP dependencies
+        run: npm ci
+        working-directory: mcp
+      - name: Test editor
+        run: npm test
+      - name: Lint editor
+        run: npm run lint
+      - name: Build editor
+        run: npm run build
+      - name: Test MCP
+        run: npm test
+        working-directory: mcp

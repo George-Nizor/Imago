@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { openFramekit, openFile, rememberLastExport } from './app-control.js';
+import { openImago, openFile, rememberLastExport } from './app-control.js';
 import {
   createYouTubeThumbnail,
   createTitleCard,
@@ -12,6 +12,8 @@ import { createVideoArtefact } from './artefacts.js';
 import { createModernArtefact } from './modern.js';
 import { createGuidedThumbnail } from './thumbnailGuide.js';
 import { FONT_CATALOG } from './typography.js';
+import { registerEditorTools } from './editor-tools.js';
+import { assertExportPath } from './safety.js';
 import {
   BACKGROUND_VARIANTS,
   loadBrand,
@@ -20,8 +22,11 @@ import {
 } from './paths.js';
 
 const server = new McpServer({
-  name: 'framekit',
+  name: 'imago',
   version: '0.1.0',
+}, {
+  instructions:
+    'Use editable document tools for iterative compositions: list_templates → create_document → replace_slot/import_image/add_text → export_document. Use one-shot create_* tools only when no later editing or app handoff is needed. All media processing is local. Paths must be absolute. Existing documents and exports are never overwritten unless overwrite=true.',
 });
 
 const brandPatchSchema = z
@@ -38,12 +43,39 @@ const brandPatchSchema = z
   })
   .optional();
 
+const readOnlyAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+const additiveFileAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
+const localUiAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
+const legacyOutputSchema = z.object({}).loose();
+
+function legacyResult(value: Record<string, unknown>) {
+  return {
+    structuredContent: value,
+    content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
+  };
+}
+
 server.registerTool(
-  'open_framekit',
+  'open_imago',
   {
-    title: 'Open Framekit',
+    title: 'Open Imago',
     description:
-      'Start the Framekit web app (if needed) and open it in the browser. Use path=thumbnail or title-card to jump into a workflow.',
+      'Start the Imago web app (if needed) and open it in the browser. Use path=thumbnail or title-card to jump into a workflow.',
     inputSchema: {
       startServer: z
         .boolean()
@@ -54,26 +86,17 @@ server.registerTool(
         .optional()
         .describe('Which screen to open'),
     },
+    outputSchema: legacyOutputSchema,
+    annotations: localUiAnnotations,
   },
   async ({ startServer, path }) => {
-    const result = await openFramekit({ startServer, path });
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              ok: true,
-              url: result.url,
-              startedServer: result.started,
-              hint: 'UI is open. Prefer create_youtube_thumbnail for automated exports.',
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    const result = await openImago({ startServer, path });
+    return legacyResult({
+      ok: true,
+      url: result.url,
+      startedServer: result.started,
+      hint: 'UI is open. Prefer create_youtube_thumbnail for automated exports.',
+    });
   },
 );
 
@@ -82,7 +105,7 @@ server.registerTool(
   {
     title: 'Create YouTube thumbnail',
     description:
-      'Compose a 1280×720 YouTube thumbnail with auto background, optional subject (cutout+outline), supporting images, and bold title text. Saves JPG under exports/.',
+      'Compose a 4K, 1080p, or 720p YouTube thumbnail with auto background, optional subject (cutout+outline), supporting images, and bold title text. Defaults to 1080p and saves JPG under exports/.',
     inputSchema: {
       title: z.string().describe('Main thumbnail title text'),
       subjectPath: z
@@ -100,10 +123,12 @@ server.registerTool(
         .optional()
         .describe('Extra cutout images around the subject'),
       background: z.enum(BACKGROUND_VARIANTS as [string, ...string[]]).optional(),
+      sizeId: z.enum(['youtube-4k', 'youtube-1080', 'youtube-720']).optional(),
       seed: z.number().optional().describe('Background RNG seed for rerolls'),
       removeSubjectBackground: z.boolean().optional(),
       outlineSubject: z.boolean().optional(),
       outputName: z.string().optional(),
+      overwrite: z.boolean().optional().describe('Replace an existing export with this name'),
       brand: brandPatchSchema,
       textEffect: z
         .enum([
@@ -127,8 +152,10 @@ server.registerTool(
       openEditor: z
         .boolean()
         .optional()
-        .describe('Also open Framekit UI after export'),
+        .describe('Also open Imago UI after export'),
     },
+    outputSchema: legacyOutputSchema,
+    annotations: additiveFileAnnotations,
   },
   async (args) => {
     const result = await createYouTubeThumbnail({
@@ -140,29 +167,20 @@ server.registerTool(
       removeSubjectBackground: args.removeSubjectBackground,
       outlineSubject: args.outlineSubject,
       outputName: args.outputName,
+      overwrite: args.overwrite,
       brand: args.brand,
       textEffect: args.textEffect,
+      sizeId: args.sizeId,
     });
     rememberLastExport(result.outputPath);
     if (args.openResult) await openFile(result.outputPath);
-    if (args.openEditor) await openFramekit({ path: 'thumbnail' });
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              ok: true,
-              outputPath: result.outputPath,
-              size: `${result.width}x${result.height}`,
-              exportsDir: EXPORTS_DIR,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    if (args.openEditor) await openImago({ path: 'thumbnail' });
+    return legacyResult({
+      ok: true,
+      outputPath: result.outputPath,
+      size: `${result.width}x${result.height}`,
+      exportsDir: EXPORTS_DIR,
+    });
   },
 );
 
@@ -178,32 +196,24 @@ server.registerTool(
       width: z.number().optional(),
       height: z.number().optional(),
       outputName: z.string().optional(),
+      overwrite: z.boolean().optional().describe('Replace an existing export with this name'),
       brand: brandPatchSchema,
       openResult: z.boolean().optional(),
       openEditor: z.boolean().optional(),
     },
+    outputSchema: legacyOutputSchema,
+    annotations: additiveFileAnnotations,
   },
   async (args) => {
     const result = await createTitleCard(args);
     rememberLastExport(result.outputPath);
     if (args.openResult) await openFile(result.outputPath);
-    if (args.openEditor) await openFramekit({ path: 'title-card' });
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              ok: true,
-              outputPath: result.outputPath,
-              size: `${result.width}x${result.height}`,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    if (args.openEditor) await openImago({ path: 'title-card' });
+    return legacyResult({
+      ok: true,
+      outputPath: result.outputPath,
+      size: `${result.width}x${result.height}`,
+    });
   },
 );
 
@@ -216,16 +226,17 @@ server.registerTool(
     inputSchema: {
       inputPath: z.string().describe('Absolute path to source image'),
       outputName: z.string().optional(),
+      overwrite: z.boolean().optional().describe('Replace an existing export with this name'),
       openResult: z.boolean().optional(),
     },
+    outputSchema: legacyOutputSchema,
+    annotations: additiveFileAnnotations,
   },
-  async ({ inputPath, outputName, openResult }) => {
-    const outputPath = await removeBackgroundFile(inputPath, outputName);
+  async ({ inputPath, outputName, overwrite, openResult }) => {
+    const outputPath = await removeBackgroundFile(inputPath, outputName, overwrite);
     rememberLastExport(outputPath);
     if (openResult) await openFile(outputPath);
-    return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, outputPath }, null, 2) }],
-    };
+    return legacyResult({ ok: true, outputPath });
   },
 );
 
@@ -233,36 +244,31 @@ server.registerTool(
   'list_background_variants',
   {
     title: 'List background variants',
-    description: 'List Framekit auto-background style IDs for thumbnails.',
+    description: 'List Imago auto-background style IDs for thumbnails.',
     inputSchema: {},
+    outputSchema: legacyOutputSchema,
+    annotations: readOnlyAnnotations,
   },
-  async () => ({
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify({ variants: BACKGROUND_VARIANTS }, null, 2),
-      },
-    ],
-  }),
+  async () => legacyResult({ variants: BACKGROUND_VARIANTS }),
 );
 
 server.registerTool(
   'get_brand_kit',
   {
     title: 'Get brand kit',
-    description: 'Read the saved Framekit brand kit (colors, fonts, outline defaults).',
+    description: 'Read the saved Imago brand kit (colors, fonts, outline defaults).',
     inputSchema: {},
+    outputSchema: legacyOutputSchema,
+    annotations: readOnlyAnnotations,
   },
-  async () => ({
-    content: [{ type: 'text', text: JSON.stringify(loadBrand(), null, 2) }],
-  }),
+  async () => legacyResult(loadBrand() as unknown as Record<string, unknown>),
 );
 
 server.registerTool(
   'update_brand_kit',
   {
     title: 'Update brand kit',
-    description: 'Patch and persist the Framekit brand kit used by MCP compositions.',
+    description: 'Patch and persist the Imago brand kit used by MCP compositions.',
     inputSchema: {
       primary: z.string().optional(),
       accent: z.string().optional(),
@@ -274,12 +280,17 @@ server.registerTool(
       subjectOutlineWidth: z.number().optional(),
       fontFamily: z.string().optional(),
     },
+    outputSchema: legacyOutputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
   async (patch) => {
     const brand = saveBrand(patch);
-    return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, brand }, null, 2) }],
-    };
+    return legacyResult({ ok: true, brand });
   },
 );
 
@@ -326,16 +337,17 @@ server.registerTool(
       width: z.number().optional(),
       height: z.number().optional(),
       outputName: z.string().optional(),
+      overwrite: z.boolean().optional().describe('Replace an existing export with this name'),
       openResult: z.boolean().optional(),
     },
+    outputSchema: legacyOutputSchema,
+    annotations: additiveFileAnnotations,
   },
   async (args) => {
     const result = await createVideoArtefact(args);
     rememberLastExport(result.outputPath);
     if (args.openResult) await openFile(result.outputPath);
-    return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, ...result }, null, 2) }],
-    };
+    return legacyResult({ ok: true, ...result });
   },
 );
 
@@ -367,17 +379,18 @@ server.registerTool(
       height: z.number().optional(),
       transparent: z.boolean().optional(),
       outputName: z.string().optional(),
+      overwrite: z.boolean().optional().describe('Replace an existing export with this name'),
       openResult: z.boolean().optional(),
     },
+    outputSchema: legacyOutputSchema,
+    annotations: additiveFileAnnotations,
   },
   async (args) => {
     const { openResult, ...rest } = args;
     const result = await createModernArtefact(rest);
     rememberLastExport(result.outputPath);
     if (openResult) await openFile(result.outputPath);
-    return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, ...result }, null, 2) }],
-    };
+    return legacyResult({ ok: true, ...result });
   },
 );
 
@@ -386,7 +399,7 @@ server.registerTool(
   {
     title: 'Create guided YouTube thumbnail',
     description:
-      'Compose a 1280×720 thumbnail using Ultimate Thumbnail Guide rules: ≤4 words, ≤3 elements, safe zones (avoid lower-right timestamp), soft vignette, darkened/blurred BG, large Anton/block type, high contrast. Prefer curiosity copy over title duplication.',
+      'Compose a 4K, 1080p, or 720p thumbnail using Ultimate Thumbnail Guide rules: ≤4 words, ≤3 elements, scaled safe zones, soft vignette, darkened/blurred BG, large Anton/block type, and high contrast. Defaults to 1080p.',
     inputSchema: {
       text: z.string().describe('Punchy curiosity text, ideally ≤4 words'),
       layout: z
@@ -402,51 +415,56 @@ server.registerTool(
       supportPath: z.string().optional(),
       backgroundPath: z.string().optional(),
       mood: z.enum(['noir', 'ember', 'fog', 'deep-teal', 'paper']).optional(),
-      textColor: z.enum(['#ffffff', '#000000', '#ffe566', '#f4efe4']).optional(),
+      textColor: z.enum(['#ffffff', '#000000', '#ffe566', '#f0ede6', '#f4efe4']).optional(),
       removeSubjectBackground: z.boolean().optional(),
       vignette: z.boolean().optional(),
+      sizeId: z.enum(['youtube-4k', 'youtube-1080', 'youtube-720']).optional(),
       outputName: z.string().optional(),
+      overwrite: z.boolean().optional().describe('Replace an existing export with this name'),
       openResult: z.boolean().optional(),
     },
+    outputSchema: legacyOutputSchema,
+    annotations: additiveFileAnnotations,
   },
   async (args) => {
     const result = await createGuidedThumbnail(args);
     rememberLastExport(result.outputPath);
     if (args.openResult) await openFile(result.outputPath);
-    return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, ...result }, null, 2) }],
-    };
+    return legacyResult({ ok: true, ...result });
   },
 );
 
 server.registerTool(
   'list_fonts',
   {
-    title: 'List Framekit fonts',
+    title: 'List Imago fonts',
     description: 'List available MCP typography fonts and roles.',
     inputSchema: {},
+    outputSchema: legacyOutputSchema,
+    annotations: readOnlyAnnotations,
   },
-  async () => ({
-    content: [{ type: 'text', text: JSON.stringify({ fonts: FONT_CATALOG }, null, 2) }],
-  }),
+  async () => legacyResult({ fonts: FONT_CATALOG }),
 );
 
 server.registerTool(
   'open_export',
   {
     title: 'Open export file',
-    description: 'Open a previously exported Framekit file in the system viewer.',
+    description: 'Open a previously exported Imago file in the system viewer.',
     inputSchema: {
       path: z.string().describe('Absolute path to an image in exports/'),
     },
+    outputSchema: legacyOutputSchema,
+    annotations: localUiAnnotations,
   },
   async ({ path }) => {
-    await openFile(path);
-    return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, opened: path }, null, 2) }],
-    };
+    const exportPath = assertExportPath(path);
+    await openFile(exportPath);
+    return legacyResult({ ok: true, opened: exportPath });
   },
 );
+
+registerEditorTools(server);
 
 async function main() {
   const transport = new StdioServerTransport();

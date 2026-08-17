@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { useBrandStore } from '../store/brandStore';
+import { makeErrorNotice, reportDiagnostic } from '../lib/diagnostics';
 
 export function useKeyboardShortcuts() {
   const doc = useEditorStore((s) => s.doc);
@@ -8,8 +9,13 @@ export function useKeyboardShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.isContentEditable ||
+        target?.closest('input, textarea, select, button, a, [contenteditable="true"]')
+      ) {
+        return;
+      }
 
       if (meta && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
@@ -102,11 +108,47 @@ export function DropImportOverlay() {
       );
       if (!files.length) return;
       const store = useEditorStore.getState();
-      // First image as subject if none exists
-      const hasSubject = store.doc?.layers.some((l) => l.role === 'subject');
+      const usedSlotIds = new Set<string>();
       for (let i = 0; i < files.length; i++) {
-        const role = !hasSubject && i === 0 ? 'subject' : 'support';
-        await store.addImageFromFile(files[i], role, brand);
+        const currentDoc = useEditorStore.getState().doc;
+        const selected =
+          i === 0
+            ? currentDoc?.layers.find((layer) => layer.id === currentDoc.selectedLayerId)
+            : undefined;
+        const selectedSlot =
+          selected?.slot && selected.slot.kind !== 'title' && !usedSlotIds.has(selected.slot.id)
+            ? selected
+            : undefined;
+        const emptySlot = currentDoc?.layers.find(
+          (layer) =>
+            layer.type === 'slot' &&
+            layer.slot?.kind !== 'title' &&
+            !usedSlotIds.has(layer.slot?.id ?? ''),
+        );
+        const targetSlot = selectedSlot ?? emptySlot;
+        try {
+          if (targetSlot?.slot) {
+            usedSlotIds.add(targetSlot.slot.id);
+            await store.replaceSlotFromFile(targetSlot.slot.id, files[i], brand);
+            continue;
+          }
+
+          // Untemplated documents and files beyond the available slots remain free layers.
+          const hasSubject = currentDoc?.layers.some(
+            (layer) => layer.type === 'image' && layer.role === 'subject',
+          );
+          const role = !hasSubject && i === 0 ? 'subject' : 'support';
+          await store.addImageFromFile(files[i], role, brand);
+        } catch (cause) {
+          reportDiagnostic('image-import', cause);
+          store.setNotice(
+            makeErrorNotice(
+              'image-import',
+              'A dropped image could not be added.',
+              'Other compatible images will still be placed.',
+            ),
+          );
+        }
       }
     };
     window.addEventListener('dragover', onDragOver);

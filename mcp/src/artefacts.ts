@@ -1,7 +1,5 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import sharp from 'sharp';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   ensureFontsRegistered,
   renderCinematicPlate,
@@ -16,7 +14,8 @@ import {
   type Mood,
   type FillSpec,
 } from './typography.js';
-import { EXPORTS_DIR, ensureDirs, loadBrand, slugify } from './paths.js';
+import { ensureDirs, loadBrand } from './paths.js';
+import { readInputImage, resolveOutputPath, writeOutput } from './safety.js';
 
 export type ArtefactKind =
   | 'intro-card'
@@ -41,6 +40,7 @@ export interface ArtefactRequest {
   height?: number;
   transparent?: boolean;
   outputName?: string;
+  overwrite?: boolean;
 }
 
 const FONT_MAP: Record<string, string> = {
@@ -79,6 +79,7 @@ export async function createVideoArtefact(req: ArtefactRequest): Promise<{
 }> {
   ensureDirs();
   ensureFontsRegistered();
+  if (req.backgroundPath) await readInputImage(req.backgroundPath);
   const notes: string[] = [];
 
   const kind = req.kind;
@@ -158,14 +159,13 @@ export async function createVideoArtefact(req: ArtefactRequest): Promise<{
       break;
   }
 
-  const name = slugify(req.outputName ?? `${kind}_${req.title}`);
   const ext = transparent ? 'png' : 'jpg';
-  const outputPath = join(EXPORTS_DIR, `${name}.${ext}`);
+  const outputPath = resolveOutputPath(req.outputName, `${kind}_${req.title}`, ext, req.overwrite);
   if (transparent) {
-    writeFileSync(outputPath, canvas.toBuffer('image/png'));
+    writeOutput(outputPath, canvas.toBuffer('image/png'), req.overwrite);
   } else {
     const jpg = await sharp(canvas.toBuffer('image/png')).jpeg({ quality: 93 }).toBuffer();
-    writeFileSync(outputPath, jpg);
+    writeOutput(outputPath, jpg, req.overwrite);
   }
 
   notes.push(`Artefact=${kind}; font=${fontFamily}; transparent=${transparent}`);

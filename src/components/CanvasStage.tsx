@@ -7,6 +7,7 @@ import {
   Transformer,
   Line,
   Group,
+  Text as KonvaText,
 } from 'react-konva';
 import type Konva from 'konva';
 import { useEditorStore, getSelectedLayer } from '../store/editorStore';
@@ -15,6 +16,10 @@ import { liquifyStroke } from '../lib/liquify';
 import { eraseOnImage } from '../lib/cutout';
 import { rasterizeTextLayer } from '../lib/textEffects';
 import type { ImageLayer, TextLayer, BackgroundLayer } from '../types/document';
+import type { SlotLayer } from '../types/document';
+import { scaleBox } from '../lib/templates';
+import { requestSlotReplacement } from '../lib/slotEvents';
+import { makeErrorNotice, reportDiagnostic } from '../lib/diagnostics';
 
 function useHtmlImage(src: string) {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
@@ -93,6 +98,57 @@ function BgNode({
   );
 }
 
+function SlotNode({
+  layer,
+  width,
+  height,
+  selected,
+  onSelect,
+}: {
+  layer: SlotLayer;
+  width: number;
+  height: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const slot = layer.slot;
+  if (!slot || !layer.visible) return null;
+  const box = scaleBox(slot.box, width, height);
+  const radius = Math.max(10, Math.round(height * 0.02));
+  return (
+    <Group
+      onClick={onSelect}
+      onTap={onSelect}
+      onDblClick={() => requestSlotReplacement(slot.id)}
+      onDblTap={() => requestSlotReplacement(slot.id)}
+    >
+      <Rect
+        x={box.x}
+        y={box.y}
+        width={box.width}
+        height={box.height}
+        cornerRadius={slot.kind === 'subject' ? radius * 2 : radius}
+        fill={selected ? 'rgba(184,156,103,0.2)' : 'rgba(114,148,136,0.11)'}
+        stroke={selected ? '#d3b878' : 'rgba(240,237,230,0.48)'}
+        strokeWidth={selected ? 4 : 2}
+        dash={[Math.max(12, height * 0.012), Math.max(8, height * 0.008)]}
+      />
+      <KonvaText
+        x={box.x}
+        y={box.y + box.height / 2 - height * 0.035}
+        width={box.width}
+        text={slot.kind === 'subject' ? '＋\nPERSON' : '＋\nIMAGE'}
+        align="center"
+        fontFamily="Space Grotesk, sans-serif"
+        fontSize={Math.max(16, height * 0.032)}
+        lineHeight={1.35}
+        fill={selected ? '#f0ede6' : 'rgba(240,237,230,0.7)'}
+        listening={false}
+      />
+    </Group>
+  );
+}
+
 function ImageNode({
   layer,
   selected,
@@ -133,6 +189,8 @@ function ImageNode({
         draggable={interactive && !layer.locked}
         onClick={onSelect}
         onTap={onSelect}
+        onDblClick={() => layer.slot && requestSlotReplacement(layer.slot.id)}
+        onDblTap={() => layer.slot && requestSlotReplacement(layer.slot.id)}
         onDragEnd={(e) => {
           const node = e.target;
           useEditorStore.getState().pushHistory();
@@ -317,6 +375,24 @@ export function CanvasStage() {
   const [size, setSize] = useState({ w: 800, h: 600 });
   const strokePts = useRef<{ x: number; y: number }[]>([]);
   const painting = useRef(false);
+  const docId = doc?.id;
+  const docWidth = doc?.width;
+  const docHeight = doc?.height;
+
+  const fitStage = useCallback(() => {
+    const el = containerRef.current;
+    if (!el || !docWidth || !docHeight) return;
+    const pad = 48;
+    const scale = Math.min(
+      Math.max(0.08, (el.clientWidth - pad * 2) / docWidth),
+      Math.max(0.08, (el.clientHeight - pad * 2) / docHeight),
+      1,
+    );
+    useEditorStore.getState().setStageView(scale, {
+      x: (el.clientWidth - docWidth * scale) / 2,
+      y: (el.clientHeight - docHeight * scale) / 2,
+    });
+  }, [docWidth, docHeight]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -328,6 +404,12 @@ export function CanvasStage() {
     setSize({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (!docId) return;
+    const id = window.requestAnimationFrame(fitStage);
+    return () => window.cancelAnimationFrame(id);
+  }, [docId, fitStage]);
 
   const selected = getSelectedLayer(doc);
   const interactive = tool === 'select' || tool === 'transform' || tool === 'text';
@@ -397,15 +479,14 @@ export function CanvasStage() {
     if (pts.length < 2) return;
 
     const store = useEditorStore.getState();
-    store.pushHistory();
     store.setBusy(tool.startsWith('liquify') ? 'Liquify…' : 'Erasing…');
     try {
+      let url: string | null = null;
       if (tool.startsWith('liquify')) {
         const mode =
           tool === 'liquify-bloat' ? 'bloat' : tool === 'liquify-pucker' ? 'pucker' : 'warp';
         const radius = brushSize / Math.max(selected.transform.scaleX, 0.01);
-        const url = await liquifyStroke(selected.src, mode, pts, radius, brushStrength, 0.5);
-        store.replaceImageSrc(selected.id, url);
+        url = await liquifyStroke(selected.src, mode, pts, radius, brushStrength, 0.5);
       } else if (tool === 'erase') {
         const radius = brushSize / Math.max(selected.transform.scaleX, 0.01);
         const strokes = pts.map((p) => ({
@@ -414,14 +495,30 @@ export function CanvasStage() {
           r: radius,
           soft: eraseSoft,
         }));
-        const url = await eraseOnImage(
+        url = await eraseOnImage(
           selected.src,
           strokes,
           selected.naturalWidth,
           selected.naturalHeight,
         );
-        store.replaceImageSrc(selected.id, url);
       }
+      if (!url) return;
+      const active = store.doc?.layers.find((layer) => layer.id === selected.id);
+      if (active?.type !== 'image' || active.src !== selected.src) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      store.pushHistory();
+      store.replaceImageSrc(selected.id, url);
+    } catch (cause) {
+      const context = 'edit';
+      reportDiagnostic(context, cause);
+      store.setNotice(
+        makeErrorNotice(
+          context,
+          tool.startsWith('liquify') ? 'Liquify stroke failed.' : 'Erase stroke failed.',
+        ),
+      );
     } finally {
       store.setBusy(null);
     }
@@ -429,6 +526,9 @@ export function CanvasStage() {
 
   return (
     <div className="canvas-wrap" ref={containerRef}>
+      <button type="button" className="canvas-fit" onClick={fitStage} aria-label="Fit canvas to workspace" data-tooltip="Fit canvas">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" /><rect x="7" y="7" width="10" height="10" rx="1" /></svg>
+      </button>
       <Stage
         width={size.w}
         height={size.h}
@@ -462,6 +562,18 @@ export function CanvasStage() {
           />
 
           {doc.layers.map((layer) => {
+            if (layer.type === 'slot') {
+              return (
+                <SlotNode
+                  key={layer.id}
+                  layer={layer}
+                  width={doc.width}
+                  height={doc.height}
+                  selected={doc.selectedLayerId === layer.id}
+                  onSelect={() => useEditorStore.getState().selectLayer(layer.id)}
+                />
+              );
+            }
             if (layer.type === 'background') {
               return (
                 <BgNode

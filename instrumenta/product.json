@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "imago",
+  "displayName": "Imago",
+  "kind": "web",
+  "adapter": "web-vite",
+  "versionSource": { "type": "package-json", "path": "package.json" },
+  "build": { "output": "dist", "command": "npm run build" },
+  "launch": {
+    "type": "web",
+    "root": "dist",
+    "port": 49321,
+    "entry": "index.html",
+    "health": "imago"
+  },
+  "mcp": {
+    "timeoutSeconds": 900,
+    "entry": "mcp/dist/mcp/src/index.js",
+    "cwd": ".",
+    "skill": "ai/skills/compose-images-with-imago"
+  },
+  "assets": {
+    "mark": "public/imago-mark.svg"
+  }
+}

@@ -2,11 +2,11 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT, ensureDirs, PREFS_PATH } from './paths.js';
+import { DATA_DIR, ROOT, ensureDirs, PREFS_PATH } from './paths.js';
 
 const execFileAsync = promisify(execFile);
-const DEV_URL = process.env.FRAMEKIT_URL ?? 'http://localhost:5173';
-const PID_FILE = join(ROOT, '.framekit', 'dev-server.pid');
+const DEV_URL = process.env.IMAGO_URL ?? process.env.FRAMEKIT_URL ?? 'http://localhost:5173';
+const PID_FILE = join(DATA_DIR, 'dev-server.pid');
 
 async function isUp(url = DEV_URL): Promise<boolean> {
   try {
@@ -39,7 +39,7 @@ export async function ensureDevServer(): Promise<{ url: string; started: boolean
     if (await isUp()) return { url: DEV_URL, started: true };
     await new Promise((r) => setTimeout(r, 400));
   }
-  throw new Error('Framekit dev server did not become ready in time');
+  throw new Error('Imago dev server did not become ready in time');
 }
 
 export async function openInBrowser(url = DEV_URL): Promise<string> {
@@ -59,20 +59,22 @@ export async function openFile(path: string): Promise<string> {
   return openInBrowser(path);
 }
 
-export async function openFramekit(opts?: {
+export async function openImago(opts?: {
   startServer?: boolean;
   path?: 'home' | 'thumbnail' | 'title-card';
+  documentId?: string;
 }): Promise<{ url: string; started: boolean }> {
   let started = false;
   if (opts?.startServer !== false) {
     const s = await ensureDevServer();
     started = s.started;
   } else if (!(await isUp())) {
-    throw new Error('Framekit is not running. Call open_framekit with startServer true.');
+    throw new Error('Imago is not running. Call open_imago with startServer true.');
   }
 
-  const hash =
-    opts?.path === 'thumbnail'
+  const hash = opts?.documentId
+    ? `#handoff=${encodeURIComponent(opts.documentId)}`
+    : opts?.path === 'thumbnail'
       ? '#workflow=thumbnail'
       : opts?.path === 'title-card'
         ? '#workflow=title-card'

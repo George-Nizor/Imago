@@ -37,7 +37,6 @@ const FPS = 10;
 const FRAME_COUNT = 18;
 const ACCENT = '#8eb6ff';
 const ACCENT2 = '#ff9ec8';
-const IVORY = '#f4f1ea';
 
 function easeOutCubic(t: number) {
   return 1 - Math.pow(1 - t, 3);

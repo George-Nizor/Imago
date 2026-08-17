@@ -19,16 +19,37 @@ function shade(hex: string, amount: number): string {
   );
 }
 
-function noise(ctx: CanvasRenderingContext2D, w: number, h: number, alpha: number) {
-  const img = ctx.createImageData(w, h);
+export function noiseTextureSize(width: number, height: number) {
+  const scale = Math.min(1, 640 / Math.max(1, width), 360 / Math.max(1, height));
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+function noise(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  alpha: number,
+  random: () => number,
+) {
+  const size = noiseTextureSize(w, h);
+  const texture = document.createElement('canvas');
+  texture.width = size.width;
+  texture.height = size.height;
+  const textureContext = texture.getContext('2d')!;
+  const img = textureContext.createImageData(size.width, size.height);
   for (let i = 0; i < img.data.length; i += 4) {
-    const v = Math.random() * 255;
+    const v = random() * 255;
     img.data[i] = v;
     img.data[i + 1] = v;
     img.data[i + 2] = v;
     img.data[i + 3] = alpha;
   }
-  ctx.putImageData(img, 0, 0);
+  textureContext.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(texture, 0, 0, w, h);
 }
 
 export const BACKGROUND_VARIANTS: { id: BackgroundVariantKind; label: string }[] = [
@@ -154,7 +175,7 @@ export function renderBackground(
   // subtle noise texture
   ctx.save();
   ctx.globalCompositeOperation = 'soft-light';
-  noise(ctx, width, height, 18);
+  noise(ctx, width, height, 18, rng);
   ctx.restore();
 
   return canvas.toDataURL('image/png');

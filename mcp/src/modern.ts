@@ -1,6 +1,6 @@
 import { createCanvas, loadImage, type Canvas } from '@napi-rs/canvas';
 import sharp from 'sharp';
-import { writeFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ensureFontsRegistered,
@@ -9,7 +9,8 @@ import {
   wrapText,
   type FillSpec,
 } from './typography.js';
-import { EXPORTS_DIR, ensureDirs, slugify } from './paths.js';
+import { MCP_ROOT, ensureDirs } from './paths.js';
+import { readInputImage, resolveOutputPath, writeOutput } from './safety.js';
 
 type Ctx = ReturnType<Canvas['getContext']>;
 
@@ -39,6 +40,7 @@ export interface ModernArtefactRequest {
   height?: number;
   transparent?: boolean;
   outputName?: string;
+  overwrite?: boolean;
 }
 
 const IVORY = '#f4f1ea';
@@ -120,7 +122,7 @@ export function renderMeshPlate(
   ctx.globalCompositeOperation = 'source-over';
   const img = ctx.getImageData(0, 0, width, height);
   for (let i = 0; i < img.data.length; i += 4) {
-    const n = (Math.random() - 0.5) * 10;
+    const n = (rng() - 0.5) * 10;
     img.data[i] = Math.min(255, Math.max(0, img.data[i] + n));
     img.data[i + 1] = Math.min(255, Math.max(0, img.data[i + 1] + n));
     img.data[i + 2] = Math.min(255, Math.max(0, img.data[i + 2] + n));
@@ -290,40 +292,6 @@ function neonFill(accent: string): FillSpec {
   };
 }
 
-async function samplePhotoColors(photo: Buffer, n = 3): Promise<string[]> {
-  const { data } = await sharp(photo)
-    .resize(48, 48, { fit: 'cover' })
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const buckets: { r: number; g: number; b: number; c: number }[] = [];
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-    // skip near-black / near-white
-    const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    if (lum < 25 || lum > 230) continue;
-    let placed = false;
-    for (const bucket of buckets) {
-      if (Math.abs(bucket.r - r) + Math.abs(bucket.g - g) + Math.abs(bucket.b - b) < 90) {
-        bucket.r = (bucket.r * bucket.c + r) / (bucket.c + 1);
-        bucket.g = (bucket.g * bucket.c + g) / (bucket.c + 1);
-        bucket.b = (bucket.b * bucket.c + b) / (bucket.c + 1);
-        bucket.c++;
-        placed = true;
-        break;
-      }
-    }
-    if (!placed) buckets.push({ r, g, b, c: 1 });
-  }
-  buckets.sort((a, b) => b.c - a.c);
-  return buckets.slice(0, n).map((b) => {
-    const toHex = (v: number) => Math.round(v).toString(16).padStart(2, '0');
-    return `#${toHex(b.r)}${toHex(b.g)}${toHex(b.b)}`;
-  });
-}
-
 /* ————————————————————————————————————————————————
  * Compositions
  * ———————————————————————————————————————————————— */
@@ -337,6 +305,7 @@ export async function createModernArtefact(req: ModernArtefactRequest): Promise<
 }> {
   ensureDirs();
   ensureFontsRegistered();
+  if (req.photoPath) await readInputImage(req.photoPath);
   const notes: string[] = [];
   const width = req.width ?? 1920;
   const height = req.height ?? 1080;
@@ -377,15 +346,15 @@ export async function createModernArtefact(req: ModernArtefactRequest): Promise<
       break;
   }
 
-  const name = slugify(req.outputName ?? `modern_${req.look}_${req.title}`);
   const ext = transparent ? 'png' : 'jpg';
-  const outputPath = join(EXPORTS_DIR, `${name}.${ext}`);
+  const outputPath = resolveOutputPath(req.outputName, `modern_${req.look}_${req.title}`, ext, req.overwrite);
   if (transparent) {
-    writeFileSync(outputPath, canvas.toBuffer('image/png'));
+    writeOutput(outputPath, canvas.toBuffer('image/png'), req.overwrite);
   } else {
-    writeFileSync(
+    writeOutput(
       outputPath,
       await sharp(canvas.toBuffer('image/png')).jpeg({ quality: 94 }).toBuffer(),
+      req.overwrite,
     );
   }
   notes.push(`look=${req.look}; ${width}x${height}`);
@@ -989,9 +958,9 @@ async function loadPhoto(
   fallback: 'portrait' | 'landscape' | 'city' = 'landscape',
 ): Promise<Buffer> {
   const fallbacks: Record<string, string> = {
-    portrait: join(process.cwd(), 'assets/photo_portrait.jpg'),
-    landscape: join(process.cwd(), 'assets/photo_landscape.jpg'),
-    city: join(process.cwd(), 'assets/photo_city.jpg'),
+    portrait: join(MCP_ROOT, 'assets', 'photo_portrait.jpg'),
+    landscape: join(MCP_ROOT, 'assets', 'photo_landscape.jpg'),
+    city: join(MCP_ROOT, 'assets', 'photo_city.jpg'),
   };
   const resolved = path && existsSync(path) ? path : fallbacks[fallback];
   if (!path) notes.push(`No photoPath — using bundled ${fallback} sample.`);

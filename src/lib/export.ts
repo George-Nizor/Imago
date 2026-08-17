@@ -7,12 +7,14 @@ import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 export async function renderDocumentToCanvas(
   doc: DocumentState,
   layers?: Layer[],
+  outputSize?: { width: number; height: number },
 ): Promise<HTMLCanvasElement> {
   const canvas = document.createElement('canvas');
-  canvas.width = doc.width;
-  canvas.height = doc.height;
+  canvas.width = outputSize?.width ?? doc.width;
+  canvas.height = outputSize?.height ?? doc.height;
   const ctx = canvas.getContext('2d')!;
   const paintLayers = layers ?? doc.layers;
+  ctx.scale(canvas.width / doc.width, canvas.height / doc.height);
 
   if (!doc.transparent) {
     ctx.fillStyle = '#000000';
@@ -46,23 +48,25 @@ export async function renderDocumentToCanvas(
 export async function exportDocument(
   doc: DocumentState,
   format: 'png' | 'jpg',
+  outputSize?: { width: number; height: number; label?: string },
 ): Promise<void> {
-  const canvas = await renderDocumentToCanvas(doc);
+  const canvas = await renderDocumentToCanvas(doc, undefined, outputSize);
+  const suffix = outputSize?.label ? `_${outputSize.label}` : '';
   if (format === 'jpg') {
     // Flatten transparency onto black for JPEG
     const flat = document.createElement('canvas');
-    flat.width = doc.width;
-    flat.height = doc.height;
+    flat.width = canvas.width;
+    flat.height = canvas.height;
     const fctx = flat.getContext('2d')!;
     fctx.fillStyle = '#000000';
-    fctx.fillRect(0, 0, doc.width, doc.height);
+    fctx.fillRect(0, 0, flat.width, flat.height);
     fctx.drawImage(canvas, 0, 0);
     const blob = await canvasToBlob(flat, 'image/jpeg', 0.92);
-    downloadBlob(blob, `${safeName(doc)}.jpg`);
+    downloadBlob(blob, `${safeName(doc)}${suffix}.jpg`);
     return;
   }
   const blob = await canvasToBlob(canvas, 'image/png');
-  downloadBlob(blob, `${safeName(doc)}.png`);
+  downloadBlob(blob, `${safeName(doc)}${suffix}.png`);
 }
 
 /** Export the frame strip as an animated GIF. */
@@ -132,7 +136,7 @@ export async function renderFrameThumbnail(
 }
 
 function safeName(doc: DocumentState) {
-  return doc.name.replace(/[^\w\-]+/g, '_');
+  return doc.name.replace(/[^\w-]+/g, '_');
 }
 
 async function drawImageLayer(

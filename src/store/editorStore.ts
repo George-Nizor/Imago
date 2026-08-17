@@ -6,6 +6,7 @@ import {
   type ImageLayer,
   type Layer,
   type LayerRole,
+  type SlotLayer,
   type TextLayer,
   type Tool,
   type BackgroundVariantKind,
@@ -21,6 +22,27 @@ import { uid } from '../lib/id';
 import { renderBackground, nextSeed } from '../lib/backgrounds';
 import { centerTransform, fileToDataUrl, loadImage } from '../lib/imageUtils';
 import { applyTextPreset } from '../lib/textEffects';
+import { removeBackgroundFromSrc } from '../lib/cutout';
+import {
+  saveSubjectCutout,
+  touchSubjectCutout,
+  type StoredSubjectCutout,
+} from '../lib/subjectLibrary';
+import {
+  makeErrorNotice,
+  makeNotice,
+  reportDiagnostic,
+  type AppNotice,
+} from '../lib/diagnostics';
+import {
+  DEFAULT_TEMPLATE_ID,
+  DEFAULT_THUMBNAIL_SIZE_ID,
+  fitImageToBox,
+  getThumbnailSize,
+  getThumbnailTemplate,
+  slotMeta,
+  type ThumbnailSizeId,
+} from '../lib/templates';
 
 const MAX_HISTORY = 40;
 const MAX_FRAMES = 48;
@@ -32,6 +54,7 @@ interface EditorStore {
   brushStrength: number;
   eraseSoft: boolean;
   busy: string | null;
+  notice: AppNotice | null;
   past: DocumentState[];
   future: DocumentState[];
   stageScale: number;
@@ -43,6 +66,7 @@ interface EditorStore {
   setBrushStrength: (n: number) => void;
   setEraseSoft: (v: boolean) => void;
   setBusy: (msg: string | null) => void;
+  setNotice: (notice: AppNotice | null) => void;
   setStageView: (scale: number, pos: { x: number; y: number }) => void;
   setPlaying: (v: boolean) => void;
 
@@ -51,8 +75,14 @@ interface EditorStore {
   redo: () => void;
 
   newThumbnail: (brand: BrandKit) => void;
+  newThumbnailFromTemplate: (
+    templateId: string,
+    brand: BrandKit,
+    sizeId?: ThumbnailSizeId,
+  ) => void;
   newTitleCard: (brand: BrandKit) => void;
   closeDoc: () => void;
+  loadDocument: (document: DocumentState) => void;
   setDocName: (name: string) => void;
 
   selectLayer: (id: string | null) => void;
@@ -64,6 +94,12 @@ interface EditorStore {
   toggleVisibility: (id: string) => void;
 
   addImageFromFile: (file: File, role?: LayerRole, brand?: BrandKit) => Promise<string>;
+  replaceSlotFromFile: (slotId: string, file: File, brand?: BrandKit) => Promise<string>;
+  replaceSubjectSlotFromLibrary: (
+    slotId: string,
+    cutout: StoredSubjectCutout,
+    brand?: BrandKit,
+  ) => Promise<string>;
   addTextLayer: (brand: BrandKit, text?: string) => string;
   rerollBackground: (brand: BrandKit, variant?: BackgroundVariantKind) => void;
   setBackgroundVariant: (variant: BackgroundVariantKind, brand: BrandKit) => void;
@@ -135,6 +171,7 @@ function emptyDoc(
   height: number,
   transparent: boolean,
   layers: Layer[],
+  extra: Partial<DocumentState> = {},
 ): DocumentState {
   const frame: AnimFrame = { id: uid('frm'), layers: structuredClone(layers) };
   return {
@@ -149,6 +186,111 @@ function emptyDoc(
     frames: [frame],
     activeFrameIndex: 0,
     fps: 8,
+    ...extra,
+  };
+}
+
+function templateDocument(templateId: string, sizeId: ThumbnailSizeId, brand: BrandKit) {
+  const template = getThumbnailTemplate(templateId);
+  const { width, height } = getThumbnailSize(sizeId);
+  const scale = height / 720;
+  const backgroundDefinition = template.slots.find((slot) => slot.kind === 'background');
+  const background = makeBackground(width, height, brand, template.background);
+  if (backgroundDefinition) background.slot = slotMeta(backgroundDefinition);
+
+  const placeholders: SlotLayer[] = template.slots
+    .filter((slot) => slot.kind !== 'background')
+    .map((slot) => ({
+      id: uid('slot'),
+      type: 'slot',
+      name: slot.label,
+      role: slot.role,
+      visible: true,
+      opacity: 1,
+      locked: true,
+      blendMode: 'normal',
+      slot: slotMeta(slot),
+    }));
+
+  const titleBase: TextLayer = {
+    id: uid('txt'),
+    type: 'text',
+    name: template.title.label,
+    role: 'text',
+    visible: true,
+    opacity: 1,
+    locked: false,
+    blendMode: 'normal',
+    slot: slotMeta(template.title, width),
+    text: template.title.text,
+    fontFamily: brand.fontFamily,
+    fontSize: Math.round(height * template.title.fontSize),
+    fontWeight: brand.fontWeight,
+    fill: brand.textFill,
+    stroke: brand.textStroke,
+    strokeWidth: Math.max(2, Math.round(brand.textStrokeWidth * scale)),
+    shadowColor: brand.shadowColor,
+    shadowBlur: Math.round(brand.shadowBlur * scale),
+    shadowOffsetX: Math.round(4 * scale),
+    shadowOffsetY: Math.round(4 * scale),
+    align: template.title.align,
+    transform: createTransform(width * template.title.x, height * template.title.y),
+    ...defaultTextEffects(),
+  };
+  const title: TextLayer = {
+    ...titleBase,
+    ...applyTextPreset(template.title.effect, titleBase),
+    effect: template.title.effect,
+  };
+  const layers: Layer[] = [background, ...placeholders, title];
+  const firstReplaceable = placeholders.find((layer) => layer.role === 'subject') ?? placeholders[0];
+  return emptyDoc(template.name, width, height, false, layers, {
+    templateId: template.id,
+    templateName: template.name,
+    selectedLayerId: firstReplaceable?.id ?? title.id,
+  });
+}
+
+function makeSlotImageLayer(
+  doc: DocumentState,
+  target: Layer,
+  src: string,
+  naturalWidth: number,
+  naturalHeight: number,
+  brand: BrandKit,
+): ImageLayer {
+  const slot = target.slot;
+  if (!slot || slot.kind === 'title') throw new Error('Image slot not found');
+  const scale = doc.height / 720;
+  return {
+    id: target.id,
+    type: 'image',
+    name: slot.label,
+    role: slot.kind === 'background' ? 'background' : target.role,
+    visible: true,
+    opacity: 1,
+    locked: false,
+    blendMode: 'normal',
+    slot,
+    src,
+    naturalWidth,
+    naturalHeight,
+    transform: fitImageToBox(
+      naturalWidth,
+      naturalHeight,
+      doc.width,
+      doc.height,
+      slot.box,
+      slot.fit,
+    ),
+    outline: {
+      ...DEFAULT_OUTLINE,
+      enabled: Boolean(slot.outline),
+      width: Math.max(2, Math.round(brand.subjectOutlineWidth * scale)),
+      color: brand.subjectOutlineColor,
+    },
+    grade: { ...DEFAULT_GRADE },
+    beauty: { ...DEFAULT_BEAUTY },
   };
 }
 
@@ -159,6 +301,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   brushStrength: 0.55,
   eraseSoft: true,
   busy: null,
+  notice: null,
   past: [],
   future: [],
   stageScale: 0.55,
@@ -170,6 +313,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setBrushStrength: (n) => set({ brushStrength: n }),
   setEraseSoft: (v) => set({ eraseSoft: v }),
   setBusy: (msg) => set({ busy: msg }),
+  setNotice: (notice) => set({ notice }),
   setStageView: (scale, pos) => set({ stageScale: scale, stagePos: pos }),
   setPlaying: (v) => set({ playing: v }),
 
@@ -207,49 +351,19 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   newThumbnail: (brand) => {
-    const width = 1280;
-    const height = 720;
-    const bg = makeBackground(width, height, brand, 'panels');
-    const textBase: TextLayer = {
-      id: uid('txt'),
-      type: 'text',
-      name: 'Title',
-      role: 'text',
-      visible: true,
-      opacity: 1,
-      locked: false,
-      blendMode: 'normal',
-      text: 'YOUR TITLE',
-      fontFamily: brand.fontFamily,
-      fontSize: brand.titleSize,
-      fontWeight: brand.fontWeight,
-      fill: brand.textFill,
-      stroke: brand.textStroke,
-      strokeWidth: brand.textStrokeWidth,
-      shadowColor: brand.shadowColor,
-      shadowBlur: brand.shadowBlur,
-      shadowOffsetX: 4,
-      shadowOffsetY: 4,
-      align: 'center',
-      transform: createTransform(width / 2, height * 0.78),
-      ...defaultTextEffects(),
-    };
-    const text: TextLayer = {
-      ...textBase,
-      ...applyTextPreset(
-        brand.defaultTextEffect === 'editorial' ? 'yt-bold' : (brand.defaultTextEffect ?? 'yt-bold'),
-        textBase,
-      ),
-      effect: brand.defaultTextEffect === 'editorial' ? 'yt-bold' : (brand.defaultTextEffect ?? 'yt-bold'),
-    };
+    get().newThumbnailFromTemplate(DEFAULT_TEMPLATE_ID, brand, DEFAULT_THUMBNAIL_SIZE_ID);
+  },
+
+  newThumbnailFromTemplate: (templateId, brand, sizeId = DEFAULT_THUMBNAIL_SIZE_ID) => {
     set({
-      doc: emptyDoc('YouTube Thumbnail', width, height, false, [bg, text]),
+      doc: templateDocument(templateId, sizeId, brand),
       past: [],
       future: [],
       tool: 'select',
-      stageScale: 0.55,
-      stagePos: { x: 40, y: 40 },
+      stageScale: 1,
+      stagePos: { x: 0, y: 0 },
       playing: false,
+      notice: null,
     });
   },
 
@@ -293,10 +407,22 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       stageScale: 0.4,
       stagePos: { x: 40, y: 40 },
       playing: false,
+      notice: null,
     });
   },
 
-  closeDoc: () => set({ doc: null, past: [], future: [], playing: false }),
+  closeDoc: () => set({ doc: null, past: [], future: [], playing: false, notice: null }),
+  loadDocument: (document) =>
+    set({
+      doc: structuredClone(document),
+      past: [],
+      future: [],
+      tool: 'select',
+      stageScale: 1,
+      stagePos: { x: 0, y: 0 },
+      playing: false,
+      notice: makeNotice('success', 'MCP document opened.', 'All embedded layers remain editable.'),
+    }),
   setDocName: (name) => {
     const { doc } = get();
     if (!doc) return;
@@ -324,6 +450,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   reorderLayer: (from, to) => {
     const { doc } = get();
     if (!doc) return;
+    if (doc.layers[from]?.slot || doc.layers[to]?.slot) return;
     get().pushHistory();
     const layers = [...doc.layers];
     const [item] = layers.splice(from, 1);
@@ -334,6 +461,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   deleteLayer: (id) => {
     const { doc } = get();
     if (!doc) return;
+    if (doc.layers.find((layer) => layer.id === id)?.slot) return;
     get().pushHistory();
     const layers = doc.layers.filter((l) => l.id !== id);
     set({
@@ -348,7 +476,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const { doc } = get();
     if (!doc) return;
     const layer = doc.layers.find((l) => l.id === id);
-    if (!layer) return;
+    if (!layer || layer.slot) return;
     get().pushHistory();
     const copy = structuredClone(layer);
     copy.id = uid(layer.type === 'text' ? 'txt' : 'img');
@@ -427,6 +555,134 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     return layer.id;
   },
 
+  replaceSlotFromFile: async (slotId, file, brand = DEFAULT_BRAND_KIT) => {
+    const initialDoc = get().doc;
+    const target = initialDoc?.layers.find((layer) => layer.slot?.id === slotId);
+    const slot = target?.slot;
+    if (!initialDoc || !target || !slot || slot.kind === 'title') {
+      throw new Error(`Image slot not found: ${slotId}`);
+    }
+
+    get().pushHistory();
+    const src = await fileToDataUrl(file);
+    const image = await loadImage(src);
+    const replacement = makeSlotImageLayer(
+      initialDoc,
+      target,
+      src,
+      image.naturalWidth,
+      image.naturalHeight,
+      brand,
+    );
+
+    const currentDoc = get().doc;
+    if (!currentDoc || currentDoc.id !== initialDoc.id) throw new Error('Document changed');
+    set({
+      doc: withLayers(
+        currentDoc,
+        currentDoc.layers.map((layer) => (layer.id === target.id ? replacement : layer)),
+        { selectedLayerId: target.id },
+      ),
+    });
+
+    if (slot.cutout) {
+      get().setBusy(`Isolating ${slot.label.toLowerCase()}…`);
+      try {
+        const cutoutSrc = await removeBackgroundFromSrc(src, (percent) => {
+          get().setBusy(`Preparing cutout AI · ${percent}%`);
+        });
+        const cutout = await loadImage(cutoutSrc);
+        const activeLayer = get().doc?.layers.find((layer) => layer.id === target.id);
+        if (
+          get().doc?.id !== initialDoc.id ||
+          activeLayer?.type !== 'image' ||
+          activeLayer.src !== src
+        ) {
+          URL.revokeObjectURL(cutoutSrc);
+          return target.id;
+        }
+        const cutoutTransform = fitImageToBox(
+          cutout.naturalWidth,
+          cutout.naturalHeight,
+          initialDoc.width,
+          initialDoc.height,
+          slot.box,
+          slot.fit,
+        );
+        get().replaceImageSrc(target.id, cutoutSrc, {
+          w: cutout.naturalWidth,
+          h: cutout.naturalHeight,
+        });
+        get().updateLayer(target.id, { transform: cutoutTransform });
+
+        if (slot.kind === 'subject') {
+          try {
+            const cutoutBlob = await (await fetch(cutoutSrc)).blob();
+            await saveSubjectCutout({
+              blob: cutoutBlob,
+              name: file.name,
+              naturalWidth: cutout.naturalWidth,
+              naturalHeight: cutout.naturalHeight,
+            });
+          } catch (error) {
+            reportDiagnostic('storage', error);
+          }
+        }
+      } catch (error) {
+        reportDiagnostic('cutout', error);
+        get().setNotice(
+          makeErrorNotice(
+            'cutout',
+            'Automatic cutout was unavailable.',
+            'The original image was placed and can still be edited.',
+          ),
+        );
+      } finally {
+        get().setBusy(null);
+      }
+    }
+    return target.id;
+  },
+
+  replaceSubjectSlotFromLibrary: async (slotId, cutout, brand = DEFAULT_BRAND_KIT) => {
+    const initialDoc = get().doc;
+    const target = initialDoc?.layers.find((layer) => layer.slot?.id === slotId);
+    if (!initialDoc || !target?.slot || target.slot.kind !== 'subject') {
+      throw new Error(`Subject slot not found: ${slotId}`);
+    }
+    if (!(cutout.blob instanceof Blob)) throw new Error('Reusable subject is invalid');
+
+    const src = URL.createObjectURL(cutout.blob);
+    try {
+      const image = await loadImage(src);
+      const replacement = makeSlotImageLayer(
+        initialDoc,
+        target,
+        src,
+        image.naturalWidth,
+        image.naturalHeight,
+        brand,
+      );
+      const currentDoc = get().doc;
+      if (!currentDoc || currentDoc.id !== initialDoc.id) throw new Error('Document changed');
+      get().pushHistory();
+      set({
+        doc: withLayers(
+          currentDoc,
+          currentDoc.layers.map((layer) => (layer.id === target.id ? replacement : layer)),
+          { selectedLayerId: target.id },
+        ),
+      });
+      await touchSubjectCutout(cutout.id).catch((error) => {
+        reportDiagnostic('storage', error);
+      });
+      return target.id;
+    } catch (error) {
+      URL.revokeObjectURL(src);
+      throw error;
+    }
+  },
+
   addTextLayer: (brand, text = 'Text') => {
     const { doc } = get();
     if (!doc) throw new Error('No document');
@@ -472,6 +728,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     if (!doc) return;
     get().pushHistory();
     const layers = doc.layers.map((l) => {
+      if (l.slot?.kind === 'background' && l.type !== 'background') {
+        const next = makeBackground(doc.width, doc.height, brand, variant ?? 'panels');
+        return { ...next, id: l.id, slot: l.slot };
+      }
       if (l.type !== 'background') return l;
       const v = variant ?? l.variant;
       const seed = nextSeed(l.seed);
@@ -576,7 +836,13 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const { doc } = get();
     if (!doc) return;
     if (doc.frames.length >= MAX_FRAMES) {
-      alert(`Max ${MAX_FRAMES} frames`);
+      set({
+        notice: makeNotice(
+          'info',
+          `This animation already has ${MAX_FRAMES} frames.`,
+          'Delete a frame before adding another.',
+        ),
+      });
       return;
     }
     get().pushHistory();

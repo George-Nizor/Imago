@@ -1,9 +1,7 @@
 import { createCanvas, GlobalFonts, loadImage, type Canvas } from '@napi-rs/canvas';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { join } from 'node:path';
+import { MCP_ROOT } from './paths.js';
 
 export type TypoStyle =
   | 'editorial'
@@ -34,7 +32,7 @@ let fontsReady = false;
 
 export function ensureFontsRegistered() {
   if (fontsReady) return;
-  const fontDir = join(__dirname, '../fonts');
+  const fontDir = join(MCP_ROOT, 'fonts');
   const pairs: [string, string][] = [
     ['ArchivoBlack.ttf', 'Archivo Black'],
     ['BebasNeue.ttf', 'Bebas Neue'],

@@ -2,26 +2,30 @@ import { useEffect, useRef, useState } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { renderFrameThumbnail } from '../lib/export';
 import type { AnimFrame, DocumentState } from '../types/document';
+import { Icon, IconButton } from './Icon';
 
 export function Filmstrip() {
   const doc = useEditorStore((s) => s.doc);
   const playing = useEditorStore((s) => s.playing);
   const stripRef = useRef<HTMLDivElement>(null);
+  const playbackFps = doc?.fps ?? 8;
+  const frameCount = doc?.frames.length ?? 0;
+  const activeFrameIndex = doc?.activeFrameIndex ?? 0;
 
   useEffect(() => {
-    if (!playing || !doc) return;
-    const ms = 1000 / Math.max(1, doc.fps || 8);
+    if (!playing || frameCount === 0) return;
+    const ms = 1000 / Math.max(1, playbackFps);
     const id = window.setInterval(() => {
       useEditorStore.getState().stepFrame(1);
     }, ms);
     return () => window.clearInterval(id);
-  }, [playing, doc?.fps, doc?.frames.length]);
+  }, [playing, playbackFps, frameCount]);
 
   useEffect(() => {
-    if (!doc || !stripRef.current) return;
+    if (!stripRef.current || frameCount === 0) return;
     const active = stripRef.current.querySelector('[data-active="true"]');
     active?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-  }, [doc?.activeFrameIndex]);
+  }, [activeFrameIndex, frameCount]);
 
   if (!doc) return null;
 
@@ -31,31 +35,25 @@ export function Filmstrip() {
   return (
     <div className="filmstrip">
       <div className="filmstrip-controls">
-        <span className="filmstrip-label">Frames</span>
-        <button
-          type="button"
+        <span className="filmstrip-label"><Icon name="film" /> Frames</span>
+        <IconButton
+          icon="previous"
+          label="Previous frame (Left arrow)"
           className="ghost"
-          title="Previous frame (←)"
           onClick={() => useEditorStore.getState().stepFrame(-1)}
-        >
-          ‹
-        </button>
-        <button
-          type="button"
+        />
+        <IconButton
+          icon={playing ? 'pause' : 'play'}
+          label={playing ? 'Pause animation' : 'Play animation'}
           className={playing ? 'accent' : 'ghost'}
-          title={playing ? 'Pause' : 'Play'}
           onClick={() => useEditorStore.getState().setPlaying(!playing)}
-        >
-          {playing ? 'Pause' : 'Play'}
-        </button>
-        <button
-          type="button"
+        />
+        <IconButton
+          icon="next"
+          label="Next frame (Right arrow)"
           className="ghost"
-          title="Next frame (→)"
           onClick={() => useEditorStore.getState().stepFrame(1)}
-        >
-          ›
-        </button>
+        />
         <label className="filmstrip-fps">
           FPS
           <input
@@ -66,22 +64,18 @@ export function Filmstrip() {
             onChange={(e) => useEditorStore.getState().setFps(Number(e.target.value) || 8)}
           />
         </label>
-        <button
-          type="button"
-          title="Duplicate current frame"
+        <IconButton
+          icon="plus"
+          label="Duplicate current frame"
           onClick={() => useEditorStore.getState().duplicateFrame()}
-        >
-          + Frame
-        </button>
-        <button
-          type="button"
+        />
+        <IconButton
+          icon="trash"
+          label="Delete current frame"
           className="ghost"
-          title="Delete current frame"
           disabled={frames.length <= 1}
           onClick={() => useEditorStore.getState().deleteFrame()}
-        >
-          Delete
-        </button>
+        />
         <span className="filmstrip-meta">
           {doc.activeFrameIndex + 1}/{frames.length}
         </span>
@@ -129,7 +123,7 @@ function FrameThumb({
     return () => {
       cancelled = true;
     };
-  }, [doc.id, doc.width, doc.height, frame.id, index, layersKey]);
+  }, [doc, layers, frame.id, index, layersKey]);
 
   return (
     <button
@@ -175,6 +169,9 @@ function layerThumbSig(l: AnimFrame['layers'][number]) {
       o: l.opacity,
       src: l.src.slice(0, 48),
     };
+  }
+  if (l.type === 'slot') {
+    return { id: l.id, slot: l.slot?.id, v: l.visible };
   }
   return { id: l.id, v: l.visible, seed: l.seed, variant: l.variant };
 }

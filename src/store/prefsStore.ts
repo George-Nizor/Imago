@@ -1,6 +1,8 @@
 import { create } from 'zustand';
+import { reportDiagnostic } from '../lib/diagnostics';
 
-const KEY = 'pedit-prefs';
+const KEY = 'imago-prefs-v1';
+const LEGACY_KEY = 'pedit-prefs';
 
 interface Prefs {
   lastExportFormat: 'png' | 'jpg';
@@ -12,7 +14,7 @@ interface Prefs {
 
 function load(): Omit<Prefs, 'set'> {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(KEY) ?? localStorage.getItem(LEGACY_KEY);
     if (raw) {
       return {
         lastExportFormat: 'jpg',
@@ -38,7 +40,11 @@ export const usePrefsStore = create<Prefs>((set, get) => ({
   set: (patch) => {
     const next = { ...get(), ...patch };
     const { set: _, ...rest } = next;
-    localStorage.setItem(KEY, JSON.stringify(rest));
+    try {
+      localStorage.setItem(KEY, JSON.stringify(rest));
+    } catch (cause) {
+      reportDiagnostic('storage', cause);
+    }
     set(patch);
   },
 }));

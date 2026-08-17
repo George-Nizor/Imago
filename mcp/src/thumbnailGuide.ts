@@ -4,15 +4,15 @@
  */
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import sharp from 'sharp';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   ensureFontsRegistered,
   paintAdvancedTypo,
   renderCinematicPlate,
   darkenBlurPlate,
 } from './typography.js';
-import { EXPORTS_DIR, ensureDirs, slugify } from './paths.js';
+import { ensureDirs } from './paths.js';
+import { readInputImage, resolveOutputPath, writeOutput } from './safety.js';
+import { THUMBNAIL_SIZES, type ThumbnailSizeId } from '../../src/lib/templates.js';
 
 export type ThumbnailLayout =
   | 'face-left-text-right'
@@ -28,10 +28,12 @@ export interface GuidedThumbnailRequest {
   supportPath?: string;
   backgroundPath?: string;
   mood?: 'noir' | 'ember' | 'fog' | 'deep-teal' | 'paper';
-  textColor?: '#ffffff' | '#000000' | '#ffe566' | '#f4efe4';
+  textColor?: '#ffffff' | '#000000' | '#ffe566' | '#f0ede6' | '#f4efe4';
   removeSubjectBackground?: boolean;
   vignette?: boolean;
   outputName?: string;
+  overwrite?: boolean;
+  sizeId?: ThumbnailSizeId;
 }
 
 export const SAFE = {
@@ -44,13 +46,29 @@ export const SAFE = {
 
 export async function createGuidedThumbnail(req: GuidedThumbnailRequest): Promise<{
   outputPath: string;
+  width: number;
+  height: number;
   checklist: string[];
   warnings: string[];
 }> {
   ensureDirs();
   ensureFontsRegistered();
-  const width = 1280;
-  const height = 720;
+  for (const inputPath of [req.subjectPath, req.supportPath, req.backgroundPath]) {
+    if (inputPath) await readInputImage(inputPath);
+  }
+  const size = THUMBNAIL_SIZES.find(
+    (candidate) => candidate.id === (req.sizeId ?? 'youtube-1080'),
+  );
+  if (!size) throw new Error(`Unknown thumbnail size: ${req.sizeId}`);
+  const { width, height } = size;
+  const resolutionScale = height / 720;
+  const safe = {
+    left: SAFE.left * resolutionScale,
+    noGoBottomRight: {
+      x: width - 300 * resolutionScale,
+      y: height - 160 * resolutionScale,
+    },
+  };
   const checklist: string[] = [];
   const warnings: string[] = [];
 
@@ -77,7 +95,14 @@ export async function createGuidedThumbnail(req: GuidedThumbnailRequest): Promis
   ctx.drawImage(await loadImage(plate), 0, 0);
 
   if (req.vignette !== false) {
-    const v = ctx.createRadialGradient(width / 2, height / 2, 180, width / 2, height / 2, 520);
+    const v = ctx.createRadialGradient(
+      width / 2,
+      height / 2,
+      180 * resolutionScale,
+      width / 2,
+      height / 2,
+      520 * resolutionScale,
+    );
     v.addColorStop(0, 'rgba(0,0,0,0)');
     v.addColorStop(1, 'rgba(0,0,0,0.5)');
     ctx.fillStyle = v;
@@ -94,7 +119,9 @@ export async function createGuidedThumbnail(req: GuidedThumbnailRequest): Promis
     const scale = Math.min((width * 0.42) / img.width, (height * 0.85) / img.height);
     const w = img.width * scale;
     const h = img.height * scale;
-    const x = layout === 'face-right-text-left' ? 40 : width - w - 40;
+    const x = layout === 'face-right-text-left'
+      ? 40 * resolutionScale
+      : width - w - 40 * resolutionScale;
     const y = (height - h) / 2;
     ctx.globalAlpha = 0.9;
     ctx.drawImage(img, x, y, w, h);
@@ -104,16 +131,16 @@ export async function createGuidedThumbnail(req: GuidedThumbnailRequest): Promis
   if (req.subjectPath) {
     elements++;
     let subj = await loadMaybeCutout(req.subjectPath, req.removeSubjectBackground !== false);
-    subj = await outlinePng(subj, 12, '#f4efe4');
+    subj = await outlinePng(subj, 12 * resolutionScale, '#f0ede6');
     const img = await loadImage(subj);
     const scale = Math.min((width * 0.5) / img.width, (height * 0.95) / img.height);
     const w = img.width * scale;
     const h = img.height * scale;
     let x = layout.includes('face-left') ? width * 0.02 : width - w - width * 0.02;
     if (layout === 'curiosity-center') x = (width - w) / 2;
-    const y = height - h + 8;
-    if (x + w > SAFE.noGoBottomRight.x && y + h > SAFE.noGoBottomRight.y) {
-      x = Math.min(x, SAFE.noGoBottomRight.x - w * 0.35);
+    const y = height - h + 8 * resolutionScale;
+    if (x + w > safe.noGoBottomRight.x && y + h > safe.noGoBottomRight.y) {
+      x = Math.min(x, safe.noGoBottomRight.x - w * 0.35);
       warnings.push('Adjusted subject to reduce timestamp collision zone');
     }
     ctx.drawImage(img, x, y, w, h);
@@ -122,14 +149,14 @@ export async function createGuidedThumbnail(req: GuidedThumbnailRequest): Promis
   }
 
   elements++;
-  const textColor = req.textColor ?? '#f4efe4';
-  const fontSize = words.length <= 2 ? 120 : words.length === 3 ? 100 : 84;
+  const textColor = req.textColor ?? '#f0ede6';
+  const fontSize = (words.length <= 2 ? 120 : words.length === 3 ? 100 : 84) * resolutionScale;
   let tx = width * 0.62;
   let ty = height * 0.28;
   let align: 'left' | 'center' | 'right' = 'left';
 
   if (layout === 'face-right-text-left') {
-    tx = SAFE.left;
+    tx = safe.left;
     ty = height * 0.3;
     align = 'left';
   } else if (layout === 'face-left-text-right') {
@@ -142,8 +169,8 @@ export async function createGuidedThumbnail(req: GuidedThumbnailRequest): Promis
     align = 'center';
   }
 
-  if (ty > 500 && tx > 900) {
-    ty = 280;
+  if (ty > 500 * resolutionScale && tx > 900 * resolutionScale) {
+    ty = 280 * resolutionScale;
     warnings.push('Moved text out of lower-right timestamp zone');
   }
   checklist.push('Text clear of lower-right timestamp zone');
@@ -164,15 +191,14 @@ export async function createGuidedThumbnail(req: GuidedThumbnailRequest): Promis
   else if (elements <= 3) checklist.push('≤3 visual elements');
   else checklist.push(`${elements} elements (acceptable if sparse)`);
 
-  checklist.push('16:9 1280×720');
+  checklist.push(`16:9 ${width}×${height}`);
   checklist.push('High contrast text via outline');
 
-  const name = slugify(req.outputName ?? `thumb_${req.text}`);
-  const outputPath = join(EXPORTS_DIR, `${name}.jpg`);
+  const outputPath = resolveOutputPath(req.outputName, `thumb_${req.text}`, 'jpg', req.overwrite);
   const jpg = await sharp(canvas.toBuffer('image/png')).jpeg({ quality: 93 }).toBuffer();
-  writeFileSync(outputPath, jpg);
+  writeOutput(outputPath, jpg, req.overwrite);
 
-  return { outputPath, checklist, warnings };
+  return { outputPath, width, height, checklist, warnings };
 }
 
 async function loadMaybeCutout(path: string, cut: boolean): Promise<Buffer> {

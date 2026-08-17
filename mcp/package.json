@@ -1,15 +1,26 @@
 {
-  "name": "framekit-mcp",
+  "name": "imago-mcp",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "MCP server for Framekit — open the app and create YouTube thumbnails / title cards",
+  "description": "MCP server for Imago by Instrumenta — create thumbnails and title cards locally",
+  "main": "./dist/mcp/src/index.js",
+  "exports": "./dist/mcp/src/index.js",
   "bin": {
-    "framekit-mcp": "./src/index.ts"
+    "imago-mcp": "./dist/mcp/src/index.js"
   },
+  "files": [
+    "assets/",
+    "dist/",
+    "fonts/"
+  ],
   "scripts": {
-    "start": "tsx src/index.ts",
-    "dev": "tsx src/index.ts"
+    "start": "node dist/mcp/src/index.js",
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepare": "npm run build"
   },
   "engines": {
     "node": ">=20"

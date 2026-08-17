@@ -1,12 +1,15 @@
 {
-  "name": "framekit",
+  "name": "imago",
   "private": true,
+  "license": "MIT",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/check-build.mjs",
     "lint": "oxlint",
+    "test": "node --experimental-strip-types tests/templates.test.mjs && node --experimental-strip-types tests/document-import.test.mjs && node --experimental-strip-types tests/handoff-server.test.mjs && node --experimental-strip-types tests/production.test.mjs",
+    "check:bundle": "node scripts/check-build.mjs",
     "preview": "vite preview",
     "mcp": "npm --prefix mcp run start",
     "mcp:install": "npm --prefix mcp install"
