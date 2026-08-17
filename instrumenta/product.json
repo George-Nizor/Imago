@@ -10,6 +10,7 @@
     "type": "web",
     "root": "dist",
     "port": 49321,
+    "fallbackPort": 45021,
     "entry": "index.html",
     "health": "imago"
   },
