@@ -116,7 +116,7 @@ export default function App() {
 function EditorLoading() {
   return (
     <main className="editor-loading" role="status" aria-live="polite">
-      <img src="./imago-mark.svg" alt="" />
+      <img src="./imago-mark.png" alt="" />
       <span className="status-pulse" />
       <p>Preparing your composition…</p>
     </main>

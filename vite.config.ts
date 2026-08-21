@@ -48,10 +48,9 @@ export default defineConfig({
     alias: [
       // onnxruntime-web 1.21 publishes `ort.bundle` and `ort.webgpu.bundle`,
       // but those modules are identical except for their self/worker filename.
-      // The default module already registers WebGPU and WASM, so resolving both
-      // IMG.LY branches here preserves GPU selection and CPU fallback without
+      // The default module already registers WebGPU and WASM, so resolving both import specifiers to one canonical module here preserves GPU selection and CPU fallback without
       // shipping the same main-thread + pthread-worker runtime twice.
-      { find: /^onnxruntime-web\/webgpu$/, replacement: ortRuntime },
+      { find: /^onnxruntime-web(?:\/webgpu)?$/, replacement: ortRuntime },
     ],
   },
   optimizeDeps: {

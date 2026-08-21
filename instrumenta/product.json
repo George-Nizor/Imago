@@ -21,6 +21,6 @@
     "skill": "ai/skills/compose-images-with-imago"
   },
   "assets": {
-    "mark": "public/imago-mark.svg"
+    "mark": "public/imago-mark.png"
   }
 }

@@ -170,7 +170,7 @@ export function Header() {
     <header className="header">
       <div className="header-left">
         <div className="product-lockup" aria-label="Imago by Instrumenta">
-          <img src="./imago-mark.svg" alt="" />
+          <img src="./imago-mark.png" alt="" />
           <span>IMAGO</span>
         </div>
         <IconButton

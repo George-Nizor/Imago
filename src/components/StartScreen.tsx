@@ -39,7 +39,7 @@ export function StartScreen() {
     <main className="start-screen">
       <header className="start-header">
         <div className="start-lockup" aria-label="Imago home">
-          <img src="./imago-mark.svg" alt="" />
+          <img src="./imago-mark.png" alt="" />
           <span>
             <strong>Imago</strong>
             <small>Instrumenta image</small>

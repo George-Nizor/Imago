@@ -21,7 +21,7 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
     if (!this.state.failed) return this.props.children;
     return (
       <main className="fatal-screen" role="alert" aria-labelledby="fatal-title">
-        <img src="./imago-mark.svg" alt="" />
+        <img src="./imago-mark.png" alt="" />
         <span className="eyebrow">Recovery</span>
         <h1 id="fatal-title">The editor hit an unexpected problem.</h1>
         <p>Reload Imago to start a fresh local session. No files were uploaded.</p>
