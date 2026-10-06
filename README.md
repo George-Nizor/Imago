@@ -1,15 +1,17 @@
 ![Imago banner](docs/images/imago-banner.png)
 
+<p align="center"><img src="docs/brand/imago-animated.svg" alt="Imago, a framed picture with a sparkle" width="96" /></p>
+
 # Imago
 
-Imago designs thumbnails, photo edits and graphics with your own Claude Code. You describe the image
+Design thumbnails, photo edits and graphics with your own Claude Code. You describe the image
 and Claude writes it as HTML, CSS and SVG, looks at its own render, and fixes what is wrong. You ask
 for changes in plain words and export a PNG, JPG or WebP.
 
 Current version: **0.2.0**. Imago 0.2.0 replaced the earlier Konva layer editor and its 34-tool MCP
 server; the old document model is gone.
 
-![Imago workspace with a finished thumbnail](docs/images/screenshots/08-workspace-done-dark.png)
+![Imago workspace with a finished thumbnail](docs/images/screenshots/03-workspace-dark.png)
 
 ## Presets
 
@@ -22,7 +24,7 @@ server; the old document model is gone.
 Exports go up to 8192 px on the long side. After a thumbnail export Imago shows the file size and
 warns when it is over 2 MB, the limit for uploads from the YouTube mobile app (desktop allows 50 MB).
 
-![The thumbnail form, light theme](docs/images/screenshots/03-form-thumbnail-light.png)
+![The thumbnail form, light theme](docs/images/screenshots/05-form-thumbnail-light.png)
 
 Each turn shows Claude Code's cost estimate (`total_cost_usd`). That is an API-price figure. On a
 subscription nothing is charged for it; it is there so you can see what a turn weighs. Ordinary turns
@@ -36,6 +38,8 @@ Fable 5.1 at high effort, with up to eight render-and-critique rounds, web searc
 stock images from Openverse (credits are kept and shown with the design). Fable uses the most of
 your plan. Anything typed in the message box goes along as direction.
 
+![A design after Take it further on Fable 5.1, with the model badge on the turn](docs/images/screenshots/04-take-it-further-dark.png)
+
 ## Library and series
 
 The Start screen shows the latest designs; **Library** holds all of them, with search, filters by
@@ -48,6 +52,8 @@ A **series** keeps a channel's look consistent. **New in this style** starts a n
 series with the source's render and HTML as a style reference, so the layout, type, colours and
 badges carry over and only the episode's content changes. Only channel settings (colours, format)
 carry over from the source's brief, never its episode notes.
+
+![The library filtered to designs without a series](docs/images/screenshots/02-library-dark.png)
 
 ## Requirements
 
@@ -71,7 +77,7 @@ npm start         # server on http://127.0.0.1:49321
 ```
 
 `npm run dev` runs the server and Vite together for working on the UI. Opening the page with
-`?mock=1` runs the UI against canned data, with no server. The screenshots here were taken that way.
+`?mock=1` runs the UI against canned data, with no server.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -138,9 +144,9 @@ spent. Developer notes are in [CLAUDE.md](CLAUDE.md).
 
 ## Licence and family
 
-Imago is MIT licensed. Bundled fonts and libraries keep their own licences; the interface type
-(Fraunces, Commissioner, Spline Sans Mono) is SIL OFL 1.1, copied with its licence files.
+Imago is MIT licensed (see [LICENSE](LICENSE)). Bundled fonts and libraries keep their own licences; the
+interface type (Fraunces, Commissioner, Spline Sans Mono) is SIL OFL 1.1, copied with its licence files.
 
-Imago is part of [Instrumenta](https://github.com/George-Nizor/Instrumenta), made by Bonehead Labs,
-and follows the Instrumenta brand v2: a teal framed picture with a sparkle, drawn as a freestanding
-object.
+Imago is part of [Instrumenta](https://github.com/George-Nizor/Instrumenta), made by
+Bonehead Labs, and follows the Instrumenta brand v2: a teal framed
+picture with a sparkle, drawn as a freestanding object.
