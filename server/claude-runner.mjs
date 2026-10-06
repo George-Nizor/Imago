@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readSeriesFile } from "./series.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,9 +54,23 @@ export function mcpConfig(config, project, projectDir) {
   return { mcpServers: { imago: { command: process.execPath, args: [config.mcpScript], env } } };
 }
 
-/** The text appended to Claude's system prompt for a turn. */
-export function systemPromptFor(config, project, run = resolveRun(config)) {
-  const system = buildSystemPrompt(project, fontFamilies(config.fontsDir));
+let seriesPrompt;
+const seriesText = () =>
+  (seriesPrompt ??= readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "presets", "series.md"), "utf8").trim());
+
+/** The "Series style" section for a project in a series that has a style reference, else "". */
+export async function seriesSection(config, project, projectDir) {
+  if (typeof project.series !== "string" || !project.series) return "";
+  const present = await access(path.join(projectDir, "reference", "style-reference.html")).then(() => true, () => false);
+  if (!present) return "";
+  const name = (await readSeriesFile(config.dataDir)).find((s) => s.id === project.series)?.name ?? project.series;
+  return seriesText().replaceAll("{{name}}", name.replace(/[\r\n"]+/g, " "));
+}
+
+/** The text appended to Claude's system prompt for a turn. `series` is the series section, if any. */
+export function systemPromptFor(config, project, run = resolveRun(config), series = "") {
+  let system = buildSystemPrompt(project, fontFamilies(config.fontsDir));
+  if (series) system = `${system}\n\n${series}`;
   return run.mode === "further" ? `${system}\n\n${furtherText()}` : system;
 }
 
@@ -89,14 +104,24 @@ const RECAP_MESSAGES = 10;
 const RECAP_CHARS = 500;
 
 /** First-turn style prompt for a project whose Claude session is gone: brief, a short recap, then the request. */
-export function buildRecoveryPrompt(project, history, userText, designExists) {
+export function buildRecoveryPrompt(project, history, userText, designExists, duplicate = false) {
   const recap = history
     .slice(-RECAP_MESSAGES)
     .map((m) => `${m.role === "user" ? "Owner" : "You"}: ${String(m.text).replace(/\s+/g, " ").trim().slice(0, RECAP_CHARS)}`)
     .join("\n");
-  const parts = ["(Your earlier conversation about this project is no longer available, so here is where things stand.)"];
+  const parts = [
+    duplicate
+      ? "(This project is a duplicate of an earlier one, so you have no memory of working on it. Here is where things stand.)"
+      : "(Your earlier conversation about this project is no longer available, so here is where things stand.)",
+  ];
   if (recap) parts.push(`Earlier messages, oldest first:\n${recap}`);
-  if (designExists) parts.push("design.html already exists in this folder with the current design: Read it first and edit it rather than starting over.");
+  if (designExists) {
+    parts.push(
+      duplicate
+        ? "design.html already holds the duplicated design: Read it first and edit it rather than starting over."
+        : "design.html already exists in this folder with the current design: Read it first and edit it rather than starting over.",
+    );
+  }
   return `${buildFirstPrompt(project, parts.join("\n\n"))}\n\n${userText}`.trim();
 }
 
@@ -223,7 +248,7 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
     const promptDir = await mkdtemp(path.join(os.tmpdir(), "imago-prompt-"));
     const promptFile = path.join(promptDir, "system.md");
     try {
-      await writeFile(promptFile, systemPromptFor(config, project, run), { mode: 0o600 });
+      await writeFile(promptFile, systemPromptFor(config, project, run, await seriesSection(config, project, projectDir)), { mode: 0o600 });
       // A further turn renders more and may fetch images, so it gets twice the time.
       const timeoutMs = run.mode === "further" ? config.turnTimeoutMs * 2 : config.turnTimeoutMs;
       let outcome;
@@ -263,7 +288,11 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
 
   // The brief goes in until claude has started a session once (`briefSent`), not merely on message one.
   const needsBrief = project.briefSent !== true && !project.sessionId;
-  let first = await attempt(needsBrief ? buildFirstPrompt(project, text) : text, Boolean(project.sessionId));
+  // A duplicate has history and a design but no session: brief it like a recovered session, with the note that design.html holds the copy.
+  const duplicated = needsBrief && Boolean(project.duplicatedFrom);
+  const designNow = () => access(path.join(projectDir, "design.html")).then(() => true, () => false);
+  const opening = duplicated ? buildRecoveryPrompt(project, history, text, await designNow(), true) : needsBrief ? buildFirstPrompt(project, text) : text;
+  let first = await attempt(opening, Boolean(project.sessionId));
   let failure = failureOf(first);
 
   // A stored session that claude no longer has fails every resume. Forget it and start fresh once.

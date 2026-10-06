@@ -13,6 +13,7 @@ changes the behaviour. [README.md](README.md) covers running it.
 | `server/claude-runner.mjs` | One turn is one `claude -p` run; builds the arguments and the system prompt |
 | `server/stream-json.mjs` | Parses Claude's stream-json into `init`, `text`, `tool_use`, `tool_result`, `result` |
 | `server/store.mjs` | Project folders and `project.json` (the server is its only writer) |
+| `server/library.mjs`, `series.mjs`, `zip.mjs` | Library list query, series metadata, the style-reference copy, the store-only zip writer |
 | `server/render-mcp.mjs` | Stdio MCP server given to claude: `render` and `cut_out` |
 | `server/validate.mjs` | The `design.html` rules |
 | `server/capabilities.mjs` | Whether claude and the renderer are ready |

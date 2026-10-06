@@ -2,29 +2,37 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "./api/client.js";
 import type { PresetId, Size } from "./api/types.js";
 
-// ---- routing: three paths, no library ----
-export type Route = { name: "start" } | { name: "new"; preset: PresetId } | { name: "project"; id: string };
+// ---- routing: four paths, no library ----
+export type Route = { name: "start" } | { name: "library" } | { name: "new"; preset: PresetId; style?: string } | { name: "project"; id: string };
 
-export function parseRoute(path: string): Route {
+export function parseRoute(path: string, search = ""): Route {
   const parts = path.split("/").filter(Boolean);
   if (parts[0] === "new" && (parts[1] === "thumbnail" || parts[1] === "photo" || parts[1] === "graphic"))
-    return { name: "new", preset: parts[1] };
+    return { name: "new", preset: parts[1], style: new URLSearchParams(search).get("style") ?? undefined };
+  if (parts[0] === "library" && !parts[1]) return { name: "library" };
   if (parts[0] === "p" && parts[1]) return { name: "project", id: decodeURIComponent(parts[1]) };
   return { name: "start" };
 }
+/** Query parameters that belong to the session, not the page, and so survive every navigation. */
+const STICKY = ["mock", "speed"];
 export function navigate(path: string) {
-  // The query string stays, so `?mock=1` survives every navigation.
-  history.pushState(null, "", path + location.search);
+  // `?mock=1` survives every navigation; a page's own query (`?style=...`) is whatever the path says.
+  const [pathname = "/", own = ""] = path.split("?");
+  const params = new URLSearchParams(own);
+  const current = new URLSearchParams(location.search);
+  for (const key of STICKY) if (current.has(key) && !params.has(key)) params.set(key, current.get(key)!);
+  const qs = params.toString();
+  history.pushState(null, "", pathname + (qs ? `?${qs}` : ""));
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 export function useRoute(): Route {
-  const [path, setPath] = useState(location.pathname);
+  const [at, setAt] = useState({ path: location.pathname, search: location.search });
   useEffect(() => {
-    const on = () => setPath(location.pathname);
+    const on = () => setAt({ path: location.pathname, search: location.search });
     window.addEventListener("popstate", on);
     return () => window.removeEventListener("popstate", on);
   }, []);
-  return parseRoute(path);
+  return parseRoute(at.path, at.search);
 }
 
 // ---- theme: dark unless the system says light; the toggle overrides and is remembered ----
@@ -84,4 +92,10 @@ export function ago(iso: string): string {
   if (s < 3600) return `${Math.round(s / 60)} min ago`;
   if (s < 86400) return `${Math.round(s / 3600)} h ago`;
   return `${Math.round(s / 86400)} d ago`;
+}
+
+/** "2 d ago" for a project's card; older than a month shows the date. */
+export function shortAgo(iso: string): string {
+  const days = (Date.now() - new Date(iso).getTime()) / 86_400_000;
+  return days > 30 ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: days > 330 ? "numeric" : undefined }) : ago(iso);
 }

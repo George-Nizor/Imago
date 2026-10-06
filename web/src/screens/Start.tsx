@@ -7,15 +7,21 @@ import { CapabilityPanel } from "../components.js";
 import { ago, errorText, navigate } from "../lib.js";
 import { PRESET_UI } from "../presets.js";
 
+const RECENT = 8;
+
 export function Start() {
   const { caps, error, checking, recheck } = useCaps();
   const [recent, setRecent] = useState<ProjectSummary[] | null>(null);
+  const [total, setTotal] = useState(0);
   const [presets, setPresets] = useState<PresetInfo[]>([]);
   const [loadError, setLoadError] = useState("");
   const ok = canCreate(caps);
 
   useEffect(() => {
-    api.listProjects().then(setRecent).catch((e) => {
+    api.listProjects({ limit: RECENT }).then((page) => {
+      setRecent(page.items);
+      setTotal(page.total);
+    }).catch((e) => {
       setRecent([]);
       setLoadError(errorText(e));
     });
@@ -59,7 +65,14 @@ export function Start() {
         })}
       </div>
 
-      <h2 className="section-title display">Recent</h2>
+      <div className="section-row">
+        <h2 className="section-title display">Recent</h2>
+        {total > 0 && (
+          <a className="view-all" href="/library" onClick={(e) => { e.preventDefault(); navigate("/library"); }}>
+            View all{total > RECENT ? ` ${total}` : ""} →
+          </a>
+        )}
+      </div>
       {recent === null ? (
         <p className="muted">Loading…</p>
       ) : recent.length === 0 ? (

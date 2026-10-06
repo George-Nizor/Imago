@@ -20,6 +20,16 @@ export function Header({ trail }: { trail?: string }) {
         <span className="display brand-name">Imago</span>
       </a>
       {trail && <span className="trail">{trail}</span>}
+      <a
+        className="nav-link"
+        href="/library"
+        onClick={(e) => {
+          e.preventDefault();
+          navigate("/library");
+        }}
+      >
+        Library
+      </a>
       <button
         type="button"
         className="icon-btn"

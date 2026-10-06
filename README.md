@@ -13,17 +13,41 @@ server; the old document model is gone.
 
 ## Presets
 
-| Preset | Starts from | Default size |
+| Preset | Starts from | Sizes |
 | --- | --- | --- |
-| YouTube thumbnail | The video's title or topic, optional channel colours and notes. Faces can be cut out locally. | 1280×720 |
-| Edit a photo | One uploaded photo and an instruction. | The photo's own size, or 1:1, 4:5, 9:16, 16:9 (long edge at most 2160) |
-| Custom graphic | A description. | 1080×1080, 1080×1350, 1080×1920, 1200×630, 1600×500, or any size from 64 to 4096 per side |
+| YouTube thumbnail | The video's title or topic, optional channel colours, notes and face photos (cut out locally). | Video 16:9, Shorts 9:16 or Podcast 1:1. Designed at 1280 on the long side and exported at 3× (3840×2160, YouTube's current recommendation) as JPG by default |
+| Edit a photo | One uploaded photo and an instruction. | The photo's own shape or one of ten crops (1:1, 4:5, 3:4, 2:3, 9:16, 4:3, 3:2, 16:9, 21:9). A crop always fits inside the photo, so it is never upscaled |
+| Custom graphic | A description and optional reference images. | 32 named sizes grouped by platform (Instagram, Facebook, X, LinkedIn, YouTube, TikTok, Pinterest, Twitch, Discord, web, print at 150 dpi, screens) or any size from 64 to 4096 per side |
+
+Exports go up to 8192 px on the long side. After a thumbnail export Imago shows the file size and
+warns when it is over 2 MB, the limit for uploads from the YouTube mobile app (desktop allows 50 MB).
 
 ![The thumbnail form, light theme](docs/images/screenshots/03-form-thumbnail-light.png)
 
 Each turn shows Claude Code's cost estimate (`total_cost_usd`). That is an API-price figure. On a
-subscription nothing is charged for it; it is there so you can see what a turn weighs. Turns seen so
-far cost roughly $0.08 to $0.21 at API rates.
+subscription nothing is charged for it; it is there so you can see what a turn weighs. Ordinary turns
+seen so far cost roughly $0.06 to $0.21 at API rates, and Take it further turns on Opus $0.28 to $0.90.
+
+## Take it further
+
+Ordinary turns run on Sonnet 5.5 at medium effort: quick and light on your plan. When a result is
+not there yet, **Take it further** continues the same conversation on Opus 5.5 (the default) or
+Fable 5.1 at high effort, with up to eight render-and-critique rounds, web search, and openly licensed
+stock images from Openverse (credits are kept and shown with the design). Fable uses the most of
+your plan. Anything typed in the message box goes along as direction.
+
+## Library and series
+
+The Start screen shows the latest designs; **Library** holds all of them, with search, filters by
+preset, series and starred, sorting, and loading forty at a time. Each design can be renamed,
+starred, duplicated, moved to a series or deleted (with Undo; deleted designs are kept in a trash
+folder for seven days). Select mode adds shift-click ranges and a bulk bar for delete, star, move and
+downloading the renders as a zip.
+
+A **series** keeps a channel's look consistent. **New in this style** starts a new design in the same
+series with the source's render and HTML as a style reference, so the layout, type, colours and
+badges carry over and only the episode's content changes. Only channel settings (colours, format)
+carry over from the source's brief, never its episode notes.
 
 ## Requirements
 

@@ -4,6 +4,8 @@ import type { Capabilities } from "./api/types.js";
 import { CapsContext } from "./caps.js";
 import { Header } from "./components.js";
 import { errorText, useRoute } from "./lib.js";
+import { ToastProvider } from "./library/ui.js";
+import { Library } from "./screens/Library.js";
 import { NewProject } from "./screens/NewProject.js";
 import { Start } from "./screens/Start.js";
 import { Workspace } from "./screens/Workspace.js";
@@ -32,13 +34,16 @@ export function App() {
 
   return (
     <CapsContext.Provider value={{ caps, error, checking, recheck }}>
-      <Header />
-      {isMock && <div className="mock-bar">Mock mode: no server, nothing is real.</div>}
-      <main>
-        {route.name === "start" && <Start />}
-        {route.name === "new" && <NewProject preset={route.preset} />}
-        {route.name === "project" && <Workspace key={route.id} id={route.id} />}
-      </main>
+      <ToastProvider>
+        <Header />
+        {isMock && <div className="mock-bar">Mock mode: no server, nothing is real.</div>}
+        <main>
+          {route.name === "start" && <Start />}
+          {route.name === "library" && <Library />}
+          {route.name === "new" && <NewProject key={`${route.preset}:${route.style ?? ""}`} preset={route.preset} style={route.style} />}
+          {route.name === "project" && <Workspace key={route.id} id={route.id} />}
+        </main>
+      </ToastProvider>
     </CapsContext.Provider>
   );
 }

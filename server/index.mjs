@@ -6,6 +6,9 @@ import { IMAGE_EXTENSIONS, MAX_UPLOAD_BYTES, UploadError, creditsFor, registerCu
 import { createCapabilities } from "./capabilities.mjs";
 import { FURTHER_DIRECTION, runTurn } from "./claude-runner.mjs";
 import { loadConfig, packageVersion } from "./config.mjs";
+import { StyleReferenceError, copyStyleReference, hasReference, queryProjects } from "./library.mjs";
+import { SeriesError, createSeriesStore } from "./series.mjs";
+import { createZipWriter } from "./zip.mjs";
 import { cutOut } from "./cutout.mjs";
 import { validateDesignFile } from "./design-files.mjs";
 import { PathError, isProjectId, isSafeLeaf } from "./paths.mjs";
@@ -83,6 +86,7 @@ const cleanText = (value, max) => (typeof value === "string" ? value.trim().slic
 /** A loopback-only server; `createServer(config)` returns {server, listen, close, port}. */
 export function createServer(config = loadConfig()) {
   const store = createStore(config.projectsDir);
+  const seriesStore = createSeriesStore(config.dataDir);
   const capabilities = createCapabilities(config);
   // id -> {controller, done, active}: the running turn (or a restore holding the slot) and its
   // completion. `active` goes false when the slot is released (just before the turn's last event, so
@@ -164,7 +168,184 @@ export function createServer(config = loadConfig()) {
       extra = { sizeAuto: true };
     }
     const title = cleanText(body.title, 80) || cleanText(Object.values(brief)[0], 60) || preset.label;
-    return store.create({ preset: preset.id, title, size, brief, extra });
+    let seriesId = null;
+    if (body.series !== undefined && body.series !== null) {
+      seriesId = await knownSeries(body.series);
+      extra = { ...extra, series: seriesId };
+    }
+    const created = await store.create({ preset: preset.id, title, size, brief, extra });
+    if (seriesId) await ensureReference(created.id, seriesId);
+    return created;
+  }
+
+  /** A series id that exists, or 400 BAD_SERIES. */
+  async function knownSeries(value) {
+    if (typeof value !== "string" || !isProjectId(value) || !(await seriesStore.get(value))) throw new HttpError(400, "BAD_SERIES", "There is no such series.");
+    return value;
+  }
+
+  /** A project joining a series that has a style project gets that project's look as its reference (best effort). */
+  async function ensureReference(id, seriesId) {
+    try {
+      const series = await seriesStore.get(seriesId);
+      const style = series?.styleProjectId;
+      if (!style || style === id || (await hasReference(store, id))) return;
+      await copyStyleReference(store, style, id);
+    } catch {
+      // The style project may be gone or unrendered; the series then simply has no reference for this project.
+    }
+  }
+
+  async function setSeries(id, seriesId) {
+    await store.mutate(id, (p) => void (p.series = seriesId), { touch: false });
+    if (seriesId) await ensureReference(id, seriesId);
+  }
+
+  /** The series a "new in this style" project joins: the source's own, or a new one named after it. */
+  async function seriesForStyle(source) {
+    const own = source.series ? await seriesStore.get(source.series) : null;
+    if (own) return own;
+    let made;
+    try {
+      made = await seriesStore.create({ name: source.title, styleProjectId: source.id });
+    } catch (error) {
+      if (!(error instanceof SeriesError) || error.code !== "EXISTS") throw error;
+      made = (await seriesStore.list()).find((s) => s.name.toLowerCase() === source.title.trim().toLowerCase());
+      if (!made) throw error;
+    }
+    await store.mutate(source.id, (p) => void (p.series = made.id), { touch: false });
+    return made;
+  }
+
+  const CHANNEL_FIELDS = new Set(["channelColours"]);
+
+  async function newInStyle(id, body) {
+    const source = await project(id);
+    if (busy(id)) throw new HttpError(409, "TURN_RUNNING", "A turn is running; try again after it finishes.");
+    if (!source.current) throw new StyleReferenceError("That project has no render yet, so there is nothing to copy the style from.");
+    await fs.promises.access(path.join(store.dirOf(id), "renders", `v${source.current}.png`)).catch(() => {
+      throw new StyleReferenceError("That project's render is missing, so there is nothing to copy the style from.");
+    });
+    const preset = presetById(source.preset);
+    const given = body.brief && typeof body.brief === "object" ? body.brief : {};
+    // Only channel-level settings carry over. Everything else (title, notes, instruction) is about the
+    // source's own episode and would mislead the new one, so it comes from the request or stays empty.
+    const brief = {};
+    for (const field of preset.briefFields) {
+      const carried = CHANNEL_FIELDS.has(field.id) ? String(source.brief?.[field.id] ?? "") : "";
+      brief[field.id] = typeof given[field.id] === "string" ? given[field.id] : carried;
+    }
+    if (source.preset === "thumbnail") brief.format = source.brief?.format ?? "video";
+    const series = await seriesForStyle(source);
+    const created = await createProject({ preset: source.preset, title: cleanText(body.title, 80) || undefined, size: source.size, brief, series: series.id });
+    try {
+      await copyStyleReference(store, id, created.id);
+    } catch (error) {
+      await store.remove(created.id).catch(() => {});
+      throw error;
+    }
+    return store.read(created.id);
+  }
+
+  async function seriesApi(req, res, b, c) {
+    const method = req.method;
+    if (!b) {
+      if (method === "GET") {
+        const counts = new Map();
+        for (const p of await store.summaries()) if (p.series) counts.set(p.series, (counts.get(p.series) ?? 0) + 1);
+        return sendJson(res, 200, (await seriesStore.list()).map((s) => ({ ...s, count: counts.get(s.id) ?? 0 })));
+      }
+      if (method === "POST") {
+        const body = await readJson(req);
+        if (body.styleProjectId) await project(String(body.styleProjectId)).catch(() => Promise.reject(new HttpError(400, "BAD_STYLE_PROJECT", "styleProjectId is not a project.")));
+        return sendJson(res, 201, await seriesStore.create({ name: body.name, styleProjectId: body.styleProjectId }));
+      }
+      throw new HttpError(405, "METHOD", "Method not allowed.");
+    }
+    if (!isProjectId(b) || c) throw new HttpError(400, "BAD_ID", "Invalid series id.");
+    if (method === "PATCH") {
+      const body = await readJson(req);
+      if (typeof body.styleProjectId === "string") await project(body.styleProjectId).catch(() => Promise.reject(new HttpError(400, "BAD_STYLE_PROJECT", "styleProjectId is not a project.")));
+      return sendJson(res, 200, await seriesStore.update(b, { name: body.name, styleProjectId: body.styleProjectId }));
+    }
+    if (method === "DELETE") {
+      await seriesStore.remove(b);
+      // Projects keep their files (and any reference); they just leave the series.
+      for (const p of await store.summaries()) if (p.series === b) await store.mutate(p.id, (x) => void (x.series = null), { touch: false }).catch(() => {});
+      return sendJson(res, 200, { ok: true });
+    }
+    throw new HttpError(405, "METHOD", "Method not allowed.");
+  }
+
+  const MAX_BULK = 500;
+  const idList = (value) => {
+    if (!Array.isArray(value) || !value.length) throw new HttpError(400, "BAD_IDS", "ids must be a non-empty list of project ids.");
+    if (value.length > MAX_BULK) throw new HttpError(400, "BAD_IDS", `At most ${MAX_BULK} projects at a time.`);
+    if (!value.every(isProjectId)) throw new HttpError(400, "BAD_IDS", "ids must be project ids.");
+    return [...new Set(value)];
+  };
+
+  async function bulk(body) {
+    const action = body.action;
+    if (!["delete", "restore", "star", "unstar", "series"].includes(action)) throw new HttpError(400, "BAD_ACTION", "action must be delete, restore, star, unstar or series.");
+    const ids = idList(body.ids);
+    let seriesId = null;
+    if (action === "series" && body.series !== null) seriesId = await knownSeries(body.series);
+    const changed = [];
+    const missing = [];
+    for (const id of ids) {
+      try {
+        if (action === "restore") {
+          if (await store.untrash(id)) changed.push(id);
+          else missing.push(id);
+          continue;
+        }
+        await project(id);
+        if (action === "delete") {
+          const running = turns.get(id);
+          running?.controller.abort();
+          await running?.done;
+          await store.trash(id);
+        } else if (action === "series") await setSeries(id, seriesId);
+        else await store.mutate(id, (p) => void (p.starred = action === "star"), { touch: false });
+        changed.push(id);
+      } catch (error) {
+        if (error instanceof StoreError && error.status === 404) missing.push(id);
+        else throw error;
+      }
+    }
+    return { ok: true, changed, missing };
+  }
+
+  async function exportZip(res, url) {
+    const ids = idList(String(url.searchParams.get("ids") ?? "").split(",").filter(Boolean));
+    const files = [];
+    for (const id of ids) {
+      let p;
+      try {
+        p = await project(id);
+      } catch {
+        continue;
+      }
+      if (!p.current) continue;
+      const file = path.join(store.dirOf(id), "renders", `v${p.current}.png`);
+      const slug = String(p.title).normalize("NFKD").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "design";
+      files.push({ file, name: `${slug}-${id}-v${p.current}.png`.slice(-120).replace(/^[^A-Za-z0-9]+/, "") });
+    }
+    if (!files.length) throw new HttpError(404, "NO_RENDERS", "None of those projects has a render to export.");
+    res.writeHead(200, {
+      "content-type": "application/zip",
+      "content-disposition": 'attachment; filename="imago-export.zip"',
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    });
+    const zip = createZipWriter((chunk) => new Promise((resolve) => (res.write(chunk) ? resolve() : res.once("drain", resolve))));
+    for (const { file, name } of files) {
+      const data = await fs.promises.readFile(file).catch(() => null);
+      if (data) await zip.add(name, data);
+    }
+    await zip.finish();
+    res.end();
   }
 
   async function api(req, res, url, segs) {
@@ -174,27 +355,45 @@ export function createServer(config = loadConfig()) {
     if (a === "capabilities" && method === "GET") return sendJson(res, 200, await capabilities.get());
     if (a === "presets" && method === "GET") return sendJson(res, 200, PRESETS);
     if (a === "fonts" && method === "GET") return sendFile(res, path.join(config.fontsDir, "fonts.json"));
+    if (a === "series") return seriesApi(req, res, b, c);
     if (a !== "projects") throw new HttpError(404, "NOT_FOUND", "Unknown API route.");
 
     if (!b) {
-      if (method === "GET") {
-        const list = await store.list();
-        return sendJson(res, 200, list.map((p) => ({
-          id: p.id,
-          title: p.title,
-          preset: p.preset,
-          updatedAt: p.updatedAt,
-          thumbnail: p.current > 0 ? `/projects/${p.id}/renders/v${p.current}.png` : null,
-        })));
-      }
+      if (method === "GET") return sendJson(res, 200, queryProjects(await store.summaries(), url.searchParams));
       if (method === "POST") return sendJson(res, 201, await createProject(await readJson(req)));
       throw new HttpError(405, "METHOD", "Method not allowed.");
+    }
+    if (b === "bulk") {
+      if (method !== "POST") throw new HttpError(405, "METHOD", "Method not allowed.");
+      return sendJson(res, 200, await bulk(await readJson(req)));
+    }
+    if (b === "export.zip") {
+      if (method !== "GET") throw new HttpError(405, "METHOD", "Method not allowed.");
+      return exportZip(res, url);
     }
     if (!isProjectId(b)) throw new HttpError(400, "BAD_ID", "Invalid project id.");
     const id = b;
 
     if (!c) {
       if (method === "GET") return sendJson(res, 200, await project(id));
+      if (method === "PATCH") {
+        const body = await readJson(req);
+        await project(id);
+        const patch = {};
+        if (body.title !== undefined) {
+          patch.title = cleanText(body.title, 80);
+          if (!patch.title) throw new HttpError(400, "BAD_TITLE", "A project needs a title.");
+        }
+        if (body.starred !== undefined) {
+          if (typeof body.starred !== "boolean") throw new HttpError(400, "BAD_STARRED", "starred must be true or false.");
+          patch.starred = body.starred;
+        }
+        if (body.series !== undefined) patch.series = body.series === null ? null : await knownSeries(body.series);
+        const next = await store.mutate(id, (p) => void Object.assign(p, patch), { touch: false });
+        if (patch.series) await ensureReference(id, patch.series);
+        emit(id, "project", { project: next });
+        return sendJson(res, 200, next);
+      }
       if (method === "DELETE") {
         await project(id);
         const running = turns.get(id);
@@ -273,6 +472,15 @@ export function createServer(config = loadConfig()) {
         });
       return sendJson(res, 202, { ok: true });
     }
+
+    if (c === "duplicate" && method === "POST" && !d) {
+      const source = await project(id);
+      if (busy(id)) throw new HttpError(409, "TURN_RUNNING", "A turn is running; duplicate after it finishes.");
+      const title = `${source.title.replace(/ \(copy\)$/, "")} (copy)`.slice(0, 80);
+      return sendJson(res, 201, await store.duplicate(id, title));
+    }
+
+    if (c === "new-in-style" && method === "POST" && !d) return sendJson(res, 201, await newInStyle(id, await readJson(req)));
 
     if (c === "cancel" && method === "POST") {
       turns.get(id)?.controller.abort();
@@ -409,7 +617,7 @@ export function createServer(config = loadConfig()) {
       }
       return await webFiles(res, url.pathname);
     } catch (error) {
-      const known = error instanceof HttpError || error instanceof StoreError || error instanceof UploadError;
+      const known = error instanceof HttpError || error instanceof StoreError || error instanceof UploadError || error instanceof SeriesError || error instanceof StyleReferenceError;
       const status = known ? error.status : error instanceof PathError ? 400 : 500;
       const code = known ? error.code : error instanceof PathError ? "BAD_PATH" : "INTERNAL";
       if (res.headersSent) return res.end();
@@ -425,6 +633,7 @@ export function createServer(config = loadConfig()) {
     capabilities,
     async listen(port = config.port, host = config.host) {
       await store.clearStaleRunning();
+      await store.purgeTrash().catch(() => {});
       await new Promise((resolve, reject) => {
         server.once("error", reject);
         server.listen(port, host, resolve);

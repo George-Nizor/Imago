@@ -3,6 +3,9 @@ import { api } from "../api/index.js";
 import type { ExportFormat, FurtherModel, Message, PresetInfo, Project, ServerEvent, TurnMode } from "../api/types.js";
 import { Icon } from "../brand/Icon.js";
 import { Btn, Spinner } from "../components.js";
+import { useDeleteWithUndo, useSeries, useToast } from "../library/hooks.js";
+import { Glyph, MenuButton, SeriesDialog } from "../library/ui.js";
+import { RenameInput } from "./Library.js";
 import { Credits, FurtherBar, ModelBadge } from "../further.js";
 import { creditLine } from "../further-lib.js";
 import { errorText, fmtSize, navigate, runErrorText } from "../lib.js";
@@ -101,7 +104,7 @@ export function Workspace({ id }: { id: string }) {
   return (
     <div className="workspace">
       <section className="stage-col" aria-label="Preview">
-        <Toolbar project={project} run={run} />
+        <Toolbar project={project} run={run} onProject={setProject} />
         <Preview project={project} run={run} />
         <Credits project={project} />
         <VersionStrip project={project} disabled={run.running} onRestore={(n) => api.restore(id, n).then(setProject).catch((e) => setRun((r) => ({ ...r, error: errorText(e), detail: "" })))} />
@@ -125,16 +128,81 @@ export function Workspace({ id }: { id: string }) {
   );
 }
 
-function Toolbar({ project, run }: { project: Project; run: Run }) {
+function Toolbar({ project, run, onProject }: { project: Project; run: Run; onProject: (p: Project) => void }) {
+  const toast = useToast();
+  const { series, refresh } = useSeries();
+  const deleteWithUndo = useDeleteWithUndo();
+  const [renaming, setRenaming] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const seriesName = project.series ? series.find((s) => s.id === project.series)?.name : undefined;
+
+  const patch = (change: { title?: string; starred?: boolean; series?: string | null }) =>
+    api.patchProject(project.id, change).then(onProject).catch((e) => toast(errorText(e)));
+  function finishRename(title: string | null) {
+    setRenaming(false);
+    const next = title?.trim();
+    if (next && next !== project.title) void patch({ title: next });
+  }
+
+  const items = [
+    { label: "Rename", onSelect: () => setRenaming(true) },
+    { label: project.starred ? "Remove star" : "Star", onSelect: () => void patch({ starred: !project.starred }) },
+    {
+      label: "Duplicate",
+      disabled: run.running,
+      onSelect: () =>
+        void api.duplicateProject(project.id).then(
+          (copy) => {
+            navigate(`/p/${copy.id}`);
+            toast(`Made "${copy.title}". Claude starts a fresh conversation, with the design already in place.`);
+          },
+          (e) => toast(errorText(e)),
+        ),
+    },
+    { label: "New in this style", disabled: !project.current, onSelect: () => navigate(`/new/${project.preset}?style=${encodeURIComponent(project.id)}`) },
+    { label: "Move to series…", onSelect: () => setMoving(true) },
+    {
+      label: "Delete",
+      danger: true,
+      divider: true,
+      disabled: run.running,
+      onSelect: () =>
+        void deleteWithUndo([project.id], (undone) => (undone ? navigate(`/p/${project.id}`) : navigate("/library")), project.title).catch((e) => toast(errorText(e))),
+    },
+  ];
+
   return (
     <div className="toolbar">
       <div className="toolbar-title">
-        <h1 className="display">{project.title}</h1>
+        {renaming ? (
+          <RenameInput title={project.title} className="lib-rename toolbar-rename" onDone={finishRename} />
+        ) : (
+          <h1 className="display" title="Double-click to rename" onDoubleClick={() => setRenaming(true)}>{project.title}</h1>
+        )}
         <span className="mono muted small">
           {fmtSize(project.size)}{project.current ? ` · v${project.current}` : ""}
         </span>
+        {seriesName && <span className="series-chip static">{seriesName}</span>}
       </div>
-      <ExportMenu project={project} disabled={run.running || !project.current} />
+      <div className="toolbar-actions">
+        <button type="button" className={`icon-btn star-btn ${project.starred ? "on" : ""}`} aria-pressed={project.starred === true} aria-label={project.starred ? "Remove star" : "Star this design"} onClick={() => void patch({ starred: !project.starred })}>
+          <Glyph name={project.starred ? "star-fill" : "star"} size={22} />
+        </button>
+        <MenuButton label="More actions" items={items} />
+        <ExportMenu project={project} disabled={run.running || !project.current} />
+      </div>
+      {moving && (
+        <SeriesDialog
+          count={1}
+          current={project.series}
+          series={series}
+          onPick={async (to) => {
+            onProject(await api.patchProject(project.id, { series: to }));
+            await refresh();
+          }}
+          onClose={() => setMoving(false)}
+        />
+      )}
     </div>
   );
 }

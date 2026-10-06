@@ -10,6 +10,7 @@ import type {
   PresetInfo,
   Project,
   ProjectSummary,
+  Series,
   ServerEvent,
   Size,
   TurnMode,
@@ -82,6 +83,7 @@ interface MockProject extends Project {
   renders: Record<number, string>;
 }
 const projects = new Map<string, MockProject>();
+const trash = new Map<string, MockProject>();
 const listeners = new Map<string, Set<(e: ServerEvent) => void>>();
 const cancelled = new Set<string>();
 let counter = 0;
@@ -119,6 +121,19 @@ seed("Rocket launch thumbnail", "thumbnail", 3, 25);
 seed("Beach sunset retouch", "photo", 2, 60 * 5);
 seed("Spring sale poster", "graphic", 4, 60 * 30);
 seed("Channel banner", "graphic", 1, 60 * 70);
+
+const series = new Map<string, Series>();
+// `?mock=library` fills the library with sixty projects in three series, to try search, paging and bulk actions.
+if (new URLSearchParams(location.search).get("mock") === "library") {
+  for (const [id, name] of [["rocket-channel", "Rocket Channel"], ["garden-diaries", "Garden Diaries"], ["chess-minutes", "Chess in Minutes"]] as const) series.set(id, { id, name, createdAt: new Date().toISOString() });
+  const topics = ["Rocket", "Garden", "Chess", "Pasta", "Budget", "Moon", "Robot", "Bike"];
+  for (let i = 0; i < 60; i++) {
+    seed(`${topics[i % topics.length]} episode ${i + 1}`, i % 7 === 3 ? "graphic" : i % 11 === 5 ? "photo" : "thumbnail", 1 + (i % 4), 90 + i * 37);
+    const p = [...projects.values()].at(-1)!;
+    if (i % 4 !== 3) p.series = [...series.keys()][i % 3]!;
+    p.starred = i % 9 === 0;
+  }
+}
 
 const mode = new URLSearchParams(location.search).get("mock");
 const caps: Capabilities =
@@ -200,13 +215,100 @@ const need = (id: string) => {
 export const mockApi: Api = {
   capabilities: async () => (await wait(150), structuredClone(caps)),
   presets: async () => PRESETS,
-  listProjects: async () =>
-    [...projects.values()]
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map<ProjectSummary>((p) => ({
-        id: p.id, title: p.title, preset: p.preset, updatedAt: p.updatedAt,
-        thumbnail: p.current ? p.renders[p.current]! : null,
-      })),
+  async listProjects(q = {}) {
+    const words = (q.query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+    const by = {
+      edited: (a: MockProject, b: MockProject) => b.updatedAt.localeCompare(a.updatedAt),
+      newest: (a: MockProject, b: MockProject) => b.createdAt.localeCompare(a.createdAt),
+      oldest: (a: MockProject, b: MockProject) => a.createdAt.localeCompare(b.createdAt),
+      title: (a: MockProject, b: MockProject) => a.title.localeCompare(b.title, undefined, { sensitivity: "base", numeric: true }),
+    }[q.sort ?? "edited"];
+    const all = [...projects.values()]
+      .filter((p) => (!q.preset || p.preset === q.preset) && (!q.series || (q.series === "none" ? !p.series : p.series === q.series)) && (!q.starred || p.starred))
+      .filter((p) => words.every((w) => `${p.title} ${Object.values(p.brief).join(" ")}`.toLowerCase().includes(w)))
+      .sort(by);
+    await wait(120);
+    const items = all.slice(q.offset ?? 0, (q.offset ?? 0) + (q.limit ?? 40)).map<ProjectSummary>((p) => ({
+      id: p.id, title: p.title, preset: p.preset, size: p.size, series: p.series ?? null, starred: p.starred === true,
+      createdAt: p.createdAt, updatedAt: p.updatedAt, versionCount: p.versions.length, current: p.current ?? 0,
+      thumbnail: p.current ? p.renders[p.current]! : null,
+    }));
+    return { items, total: all.length };
+  },
+  async patchProject(id, patch) {
+    const p = need(id);
+    if (patch.title !== undefined) p.title = patch.title.trim() || p.title;
+    if (patch.starred !== undefined) p.starred = patch.starred;
+    if (patch.series !== undefined) p.series = patch.series;
+    emit(id, { type: "project", project: strip(p) });
+    return strip(p);
+  },
+  async duplicateProject(id) {
+    const p = need(id);
+    const copyId = `${p.id.replace(/-[a-z0-9]{3,5}$/, "")}-${(++counter).toString(36)}c`;
+    const now = new Date().toISOString();
+    const copy: MockProject = { ...structuredClone(p), id: copyId, title: `${p.title.replace(/ \(copy\)$/, "")} (copy)`, createdAt: now, updatedAt: now, sessionId: null, starred: false, running: false };
+    projects.set(copyId, copy);
+    return strip(copy);
+  },
+  async newInStyle(id, body) {
+    const p = need(id);
+    if (!p.series) {
+      const sid = `${p.id}-series`;
+      series.set(sid, { id: sid, name: p.title, createdAt: new Date().toISOString(), styleProjectId: p.id });
+      p.series = sid;
+    }
+    const made = await this.createProject({ preset: p.preset, title: body.title, size: p.size, brief: { ...p.brief, ...body.brief }, series: p.series });
+    const m = projects.get(made.id)!;
+    m.series = p.series;
+    return strip(m);
+  },
+  async bulk(action, ids, to) {
+    const changed: string[] = [];
+    const missing: string[] = [];
+    for (const id of ids) {
+      const p = projects.get(id);
+      if (action === "restore") {
+        const gone = trash.get(id);
+        if (gone) {
+          projects.set(id, gone);
+          trash.delete(id);
+          changed.push(id);
+        } else missing.push(id);
+        continue;
+      }
+      if (!p) {
+        missing.push(id);
+        continue;
+      }
+      if (action === "delete") {
+        trash.set(id, p);
+        projects.delete(id);
+      } else if (action === "series") p.series = to ?? null;
+      else p.starred = action === "star";
+      changed.push(id);
+    }
+    return { ok: true, changed, missing };
+  },
+  exportZipUrl: (ids) => URL.createObjectURL(new Blob([`mock zip of ${ids.join(", ")}`], { type: "application/zip" })),
+  async listSeries() {
+    return [...series.values()].map((s) => ({ ...s, count: [...projects.values()].filter((p) => p.series === s.id).length }));
+  },
+  async createSeries(name) {
+    const s: Series = { id: `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${(++counter).toString(36)}`, name, createdAt: new Date().toISOString() };
+    series.set(s.id, s);
+    return s;
+  },
+  async updateSeries(id, patch) {
+    const s = series.get(id);
+    if (!s) throw new ApiError("NOT_FOUND", "No such series.", 404);
+    if (patch.name) s.name = patch.name;
+    return s;
+  },
+  async deleteSeries(id) {
+    series.delete(id);
+    for (const p of projects.values()) if (p.series === id) p.series = null;
+  },
   async createProject(body: CreateBody) {
     const fmt = body.preset === "thumbnail" ? THUMBNAIL_FORMATS.find((f) => f.id === body.brief.format) : undefined;
     const size = fmt?.size ?? body.size ?? SIZES[body.preset]!;
@@ -216,7 +318,7 @@ export const mockApi: Api = {
     const p: MockProject = {
       schemaVersion: 1, id, title: body.title || PRESETS.find((x) => x.id === body.preset)!.label, preset: body.preset,
       size, createdAt: now, updatedAt: now, sessionId: null, brief: body.brief, assets: [], messages: [],
-      versions: [], current: null, running: false, renders: {}, sizeAuto,
+      versions: [], current: null, running: false, renders: {}, sizeAuto, series: body.series ?? null, starred: false,
     };
     projects.set(id, p);
     await wait(300);

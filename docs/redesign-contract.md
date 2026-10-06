@@ -21,7 +21,10 @@ Imago/
 │   ├── validate.mjs    design.html rules
 │   ├── cutout.mjs      background removal (@imgly/background-removal-node)
 │   ├── render-mcp.mjs  stdio MCP server handed to claude: tools `render` and `cut_out`
-│   └── presets/        design-rules.md, thumbnail.md, photo.md, graphic.md, reference/
+│   ├── series.mjs      series.json (series metadata)
+│   ├── library.mjs     list query (filter, sort, page) and the style-reference copy
+│   ├── zip.mjs         a store-only zip writer for the library's Export
+│   └── presets/        design-rules.md, thumbnail.md, photo.md, graphic.md, series.md, reference/
 ├── render/render.cjs   headless Electron: design.html -> png|jpg|webp
 ├── fonts/              content fonts for designs (TTF) + fonts.css + fonts.json
 ├── web/                Vite + React + TS UI -> web/dist
@@ -36,7 +39,7 @@ Scripts: `npm start` (server), `npm run dev` (server and Vite together, Vite pro
 - `PORT` and `HOST` come from the environment. The launcher sets `HOST=127.0.0.1` and a port; the
   default is `127.0.0.1:49321`. Never listen on anything but loopback.
 - `IMAGO_WEB_ROOT` is the built UI, `web/dist` by default, resolved against the package root.
-- `IMAGO_DATA_DIR` holds the projects, `~/.local/share/imago` by default.
+- `IMAGO_DATA_DIR` holds the projects (`projects/`), `series.json` and the trash (`projects/.trash/`), `~/.local/share/imago` by default.
 - `IMAGO_CLAUDE_BIN` is `claude` by default. Tests point it at `tests/fixtures/fake-claude.mjs`.
 - `IMAGO_MODEL` defaults to `claude-sonnet-5-5`. `IMAGO_EFFORT` defaults to `medium`.
 - `IMAGO_FURTHER_MODELS` defaults to `opus=claude-opus-5-5,fable=claude-fable-5-1`: the models a
@@ -55,6 +58,7 @@ the title plus a short random suffix).
 project.json
 design.html             current design; what the preview shows
 assets/                 uploads, cutouts (safe leaf names only)
+reference/              style-reference.html: the series reference design (see Library); never served
 versions/v<n>.html      snapshot taken at each render
 renders/v<n>.png        the render of that snapshot, at scale 1
 exports/                files made by Export
@@ -77,9 +81,14 @@ exports/                files made by Export
   "messages": [{ "role": "user|assistant", "text": "", "at": "ISO", "version": null, "mode": "standard|further", "model": "claude-..." }],
   "versions": [{ "n": 1, "at": "ISO", "warnings": [] }],
   "current": 1,
-  "running": false
+  "running": false,
+  "series": null,
+  "starred": false
 }
 ```
+
+`series` (a series id or null) and `starred` belong to the library; a `project.json` without them
+counts as no series and not starred. A duplicate also carries `duplicatedFrom` (the source id).
 
 `briefSent` is false until claude has started a session for the project (the `system/init` event
 or a stored `sessionId`). The first-turn prompt (the brief plus the user's text) is sent on every
@@ -218,10 +227,19 @@ status.
 | `GET /api/capabilities` | | `{claude: {state: "ready"\|"missing"\|"signed-out", reason, fix}, renderer: {state: "ready"\|"missing", reason, fix}, model, effort}` |
 | `GET /api/presets` | | `[{id, label, description, defaultSize, sizes, briefFields, chips: [string]}]` |
 | `GET /api/fonts` | | `fonts.json` content |
-| `GET /api/projects` | | `[{id, title, preset, updatedAt, thumbnail: url\|null}]`, newest first |
-| `POST /api/projects` | `{preset, title?, size?, brief}` | `project` (does not start a turn) |
+| `GET /api/projects` | query: `query` (words, all must appear in the title or brief), `preset`, `series` (an id, or `none`), `starred=1`, `sort` (`edited` default, `newest`, `oldest`, `title`), `offset`, `limit` (default 40, at most 200) | `{items, total}`; an item is the compact card `{id, title, preset, size, series, starred, createdAt, updatedAt, versionCount, current, thumbnail: url\|null}` (no conversation) |
+| `POST /api/projects` | `{preset, title?, size?, brief, series?}` | `project` (does not start a turn); `series` must exist (400 `BAD_SERIES`) |
 | `GET /api/projects/:id` | | `project` |
-| `DELETE /api/projects/:id` | | `{ok: true}` |
+| `PATCH /api/projects/:id` | `{title?, starred?, series?: id\|null}` | `project`; does not change `updatedAt` (a rename is not an edit of the design); 400 `BAD_TITLE`, `BAD_STARRED`, `BAD_SERIES` |
+| `DELETE /api/projects/:id` | | `{ok: true}`; permanent (the UI uses the bulk delete below, which can be undone) |
+| `POST /api/projects/:id/duplicate` | | 201 `project`: the folder copied with versions, renders and assets under a new id, title "<title> (copy)", no `sessionId`, `briefSent` false, not starred. 409 `TURN_RUNNING` while a turn runs |
+| `POST /api/projects/:id/new-in-style` | `{title?, brief?}` | 201 `project`: same preset and size (a thumbnail keeps its format), in the source's series (a series named after the source is created, with the source as its `styleProjectId`, when it has none), with `assets/style-reference.png` (the source's current render, registered as an asset of kind `reference`) and `reference/style-reference.html` (its design.html). Content brief fields come from `brief`, the others (channel colours) carry over. 409 `NO_RENDER` when the source has no render, 409 `TURN_RUNNING` while it runs |
+| `POST /api/projects/bulk` | `{action: "delete"\|"restore"\|"star"\|"unstar"\|"series", ids (1 to 500), series?: id\|null}` | `{ok: true, changed: [id], missing: [id]}`. `delete` aborts a running turn, waits, and moves the folder to `projects/.trash/` (undoable with `restore`; purged when older than seven days, at start-up). `series` with `null` takes projects out of any series |
+| `GET /api/projects/export.zip?ids=a,b` | | `application/zip` (store-only, no dependency): each project's current render as `<title>-<id>-v<n>.png`; projects without a render are skipped, 404 `NO_RENDERS` when none has one |
+| `GET /api/series` | | `[{id, name, createdAt, styleProjectId?, count}]` |
+| `POST /api/series` | `{name, styleProjectId?}` | 201 series; 409 `EXISTS` for a name already used (case-insensitive) |
+| `PATCH /api/series/:id` | `{name?, styleProjectId?: id\|null}` | series |
+| `DELETE /api/series/:id` | | `{ok: true}`; its projects leave the series and keep their files |
 | `POST /api/projects/:id/assets` | raw bytes; `x-filename` header (required); PNG, JPEG or WebP; at most 40 MB and 100 megapixels (413 `IMAGE_TOO_LARGE`); `Content-Type` only `application/octet-stream` or `image/png\|jpeg\|webp` | `{name, width, height}`; names are claimed atomically (`wx`), `-2`, `-3` ... on a clash |
 | `POST /api/projects/:id/assets/:name/cutout` | | `{name, width, height}` |
 | `POST /api/projects/:id/messages` | `{text}` | 202 `{ok: true}`; 409 if a turn is running |
@@ -229,6 +247,21 @@ status.
 | `POST /api/projects/:id/restore` | `{version}` | `project` (copies `versions/v<n>.html` to `design.html`, sets `current`); 404 when the version or its file is missing; 409 while a turn runs |
 | `POST /api/projects/:id/export` | `{format: "png"\|"jpg"\|"webp", scale: 1\|1.5\|2\|3 (longest output edge at most 8192)}` | `{name, url, width, height, bytes}` |
 | `GET /api/projects/:id/events` | | SSE, below |
+
+### Series and the style reference
+
+`<IMAGO_DATA_DIR>/series.json` is `[{id, name, createdAt, styleProjectId?}]` and `project.series` is a
+series id. A series keeps a channel's thumbnails looking alike. When a project in a series has
+`reference/style-reference.html`, the runner appends `presets/series.md` (the "Series style"
+section: match the reference's layout system, type, colours, badges and treatment exactly, change
+only the title and the imagery) to the system prompt. A project that joins a series whose
+`styleProjectId` still has a render (by `PATCH`, bulk or `POST /api/projects` with `series`) gets the
+same reference copied in. `reference/` is not one of the served folders, and Claude's `Read(./**)`
+reaches it; it still cannot write there.
+
+A duplicate has history but no session, so its first turn is built like a recovered session: the
+brief, a recap of the last ten messages, and the note "design.html already holds the duplicated
+design: Read it first and edit it rather than starting over", then the user's text.
 
 ### Who may call (origin rule)
 
@@ -246,7 +279,7 @@ The server also serves these files, with `Cache-Control: no-store` and `X-Conten
 
 - `/projects/:id/design.html` and `/projects/:id/versions/v<n>.html`, with
   `Content-Security-Policy: sandbox; default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'`.
-- `/projects/:id/assets/*`, `/projects/:id/renders/*` and `/projects/:id/exports/*`: only
+- `/projects/:id/assets/*`, `/projects/:id/renders/*` and `/projects/:id/exports/*` (never `reference/` or the trash): only
   `.png`, `.jpg`, `.jpeg` and `.webp` (404 for anything else, sidecar `.json` files included), each
   with `Content-Security-Policy: sandbox; default-src 'none'`. Only those extensions are registered
   into `project.assets`.
@@ -281,6 +314,14 @@ The UI follows Instrumenta brand v2 (`Instrumenta/brand/ALIGNMENT.md`). The acce
 It uses Fraunces for names and headings, Commissioner for the interface, and Spline Sans Mono for
 sizes, versions and costs. It has dark and light themes, honours reduced motion and shows a
 visible focus.
+
+Routes: `/` (start: the three presets and the latest eight projects, "View all"), `/library`,
+`/new/<preset>` (`?style=<project id>` for "New in this style"), `/p/<id>`. The library searches by
+title and brief, filters by preset, series and starred, sorts four ways, loads 40 at a time, and has a
+"⋯" menu per card (also in the workspace header: Open, Rename, Star, Duplicate, New in this style,
+Move to series, Delete with a six-second Undo), multi-select (checkboxes, shift-click range, select
+all shown) and a bulk bar (Delete, Star, Move to series, Export as a zip). The thumbnail start form
+has an optional Series picker (none, existing, new).
 
 Every asset is copied into `web/public/brand/`; nothing is fetched from a CDN. The content fonts in
 `fonts/` are for designs, never for the chrome.
@@ -334,3 +375,5 @@ further": the next turn runs on a stronger model with more freedom and more tool
   disclosure under the preview.
 - `FAKE_CLAUDE_ARGS_OUT=<file>` makes the fake claude append `{argv, stdin, systemPrompt}` per call;
   `FAKE_CLAUDE_STOCK=1` makes it play a `fetch_image` call.
+
+`tests/fixtures/seed-library.mjs <dataDir> [count]` fills a data directory with fake projects and three series, for looking at the library.

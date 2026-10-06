@@ -6,7 +6,7 @@ export interface Size {
 }
 export interface AssetInfo {
   name: string;
-  kind: "upload" | "cutout" | "stock";
+  kind: "upload" | "cutout" | "stock" | "reference";
   width: number;
   height: number;
   from: string | null;
@@ -49,13 +49,52 @@ export interface Project {
   versions: { n: number; at: string; warnings: string[] }[];
   current: number | null;
   running: boolean;
+  /** Library fields; absent on projects made before the library existed. */
+  series?: string | null;
+  starred?: boolean;
 }
+/** The compact card the list endpoint returns (no conversation, no brief). */
 export interface ProjectSummary {
   id: string;
   title: string;
   preset: PresetId;
+  size: Size;
+  series: string | null;
+  starred: boolean;
+  createdAt: string;
   updatedAt: string;
+  versionCount: number;
+  current: number;
   thumbnail: string | null;
+}
+export type LibrarySort = "edited" | "newest" | "oldest" | "title";
+export interface ListQuery {
+  query?: string;
+  preset?: PresetId;
+  /** A series id, or "none" for projects outside any series. */
+  series?: string;
+  starred?: boolean;
+  sort?: LibrarySort;
+  offset?: number;
+  limit?: number;
+}
+export interface ProjectList {
+  items: ProjectSummary[];
+  total: number;
+}
+export interface Series {
+  id: string;
+  name: string;
+  createdAt: string;
+  styleProjectId?: string;
+  /** How many projects are in it (list only). */
+  count?: number;
+}
+export type BulkAction = "delete" | "restore" | "star" | "unstar" | "series";
+export interface BulkResult {
+  ok: true;
+  changed: string[];
+  missing: string[];
 }
 export interface ReadyState {
   state: "ready" | "missing" | "signed-out";
@@ -134,13 +173,26 @@ export interface CreateBody {
   /** Omit for photos: the server sizes the canvas from the first upload and brief.aspect. */
   size?: Size;
   brief: Record<string, string>;
+  /** An existing series id. */
+  series?: string;
 }
 
 /** Everything the screens need from a server; the real client and the mock both implement it. */
 export interface Api {
   capabilities(): Promise<Capabilities>;
   presets(): Promise<PresetInfo[]>;
-  listProjects(): Promise<ProjectSummary[]>;
+  listProjects(query?: ListQuery): Promise<ProjectList>;
+  patchProject(id: string, patch: { title?: string; starred?: boolean; series?: string | null }): Promise<Project>;
+  duplicateProject(id: string): Promise<Project>;
+  /** A new project in the source's series and style; `title` and `brief` carry the new content. */
+  newInStyle(id: string, body: { title?: string; brief?: Record<string, string> }): Promise<Project>;
+  bulk(action: BulkAction, ids: string[], series?: string | null): Promise<BulkResult>;
+  /** URL that downloads the current render of each project as one zip. */
+  exportZipUrl(ids: string[]): string;
+  listSeries(): Promise<Series[]>;
+  createSeries(name: string): Promise<Series>;
+  updateSeries(id: string, patch: { name?: string }): Promise<Series>;
+  deleteSeries(id: string): Promise<void>;
   createProject(body: CreateBody): Promise<Project>;
   getProject(id: string): Promise<Project>;
   deleteProject(id: string): Promise<void>;

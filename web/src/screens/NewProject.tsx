@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/index.js";
-import type { CreateBody, PresetId, PresetInfo, Size } from "../api/types.js";
+import type { CreateBody, PresetId, PresetInfo, Project, Size } from "../api/types.js";
 import { canCreate, useCaps } from "../caps.js";
 import { Icon } from "../brand/Icon.js";
 import { Btn, CapabilityPanel, Dropzone, Spinner } from "../components.js";
+import { useSeries } from "../library/hooks.js";
+import { SeriesField } from "../library/ui.js";
 import { errorText, fmtSize, navigate } from "../lib.js";
 import { THUMBNAIL_FORMATS, graphicSizes, photoAspects, presetUi } from "../presets.js";
 
 type Stage = { label: string; state: "todo" | "doing" | "done" };
 
-export function NewProject({ preset }: { preset: PresetId }) {
+export function NewProject({ preset, style }: { preset: PresetId; style?: string }) {
   const ui = presetUi(preset);
   const { caps, checking, recheck } = useCaps();
   const ok = canCreate(caps);
@@ -17,6 +19,18 @@ export function NewProject({ preset }: { preset: PresetId }) {
   useEffect(() => {
     api.presets().then((all) => setInfo(all.find((p) => p.id === preset))).catch(() => {});
   }, [preset]);
+  // "New in this style": the canvas, format and series come from an earlier design.
+  const [source, setSource] = useState<Project | null>(null);
+  const [sourceError, setSourceError] = useState("");
+  useEffect(() => {
+    if (!style) return;
+    api.getProject(style).then((p) => (p.preset === preset ? setSource(p) : setSourceError("That design is a different kind of project."))).catch((e) => setSourceError(errorText(e)));
+  }, [style, preset]);
+  const styled = Boolean(style);
+  const { series: allSeries } = useSeries();
+  const [seriesChoice, setSeriesChoice] = useState(""); // "" none, an id, or "__new"
+  const [seriesName, setSeriesName] = useState("");
+  const createdSeries = useRef<string | null>(null);
   const sizes = graphicSizes(info);
   const aspects = photoAspects(info);
 
@@ -45,7 +59,9 @@ export function NewProject({ preset }: { preset: PresetId }) {
   const ready =
     ok &&
     (preset === "thumbnail" ? title.trim().length > 0 : preset === "photo" ? files.length > 0 && instruction.trim().length > 0 : description.trim().length > 0) &&
-    (preset !== "graphic" || picked !== undefined || customOk);
+    (preset !== "graphic" || styled || picked !== undefined || customOk) &&
+    (!styled || source !== null) &&
+    (seriesChoice !== "__new" || seriesName.trim().length > 0);
 
   async function submit() {
     setError("");
@@ -81,8 +97,17 @@ export function NewProject({ preset }: { preset: PresetId }) {
         projectTitle = shortTitle(description);
         size = picked ? picked.size : { width: Number(custom.width), height: Number(custom.height) };
       }
-      const body: CreateBody = { preset, title: projectTitle, brief, ...(size && { size }) };
-      if (!createdId.current) createdId.current = (await api.createProject(body)).id;
+      if (!createdId.current) {
+        if (styled) {
+          // The server keeps the source's canvas and format, joins its series and copies its look.
+          createdId.current = (await api.newInStyle(style!, { title: projectTitle, brief })).id;
+        } else {
+          let series: string | undefined = seriesChoice && seriesChoice !== "__new" ? seriesChoice : undefined;
+          if (seriesChoice === "__new") series = createdSeries.current ??= (await api.createSeries(seriesName.trim())).id;
+          const body: CreateBody = { preset, title: projectTitle, brief, ...(size && { size }), ...(series && { series }) };
+          createdId.current = (await api.createProject(body)).id;
+        }
+      }
       const projectId = createdId.current;
 
       if (uploadsFirst) {
@@ -117,7 +142,7 @@ export function NewProject({ preset }: { preset: PresetId }) {
       next();
       const uploaded = files.map((f) => uploads.current.get(f)!.name);
       try {
-        await api.sendMessage(projectId, firstMessage(preset, { title, colours, notes, instruction, description, size }, uploaded));
+        await api.sendMessage(projectId, firstMessage(preset, { title, colours, notes, instruction, description, size }, uploaded, styled || (preset === "thumbnail" && Boolean(seriesChoice) && seriesChoice !== "__new" && Boolean(allSeries.find((s) => s.id === seriesChoice)?.styleProjectId))));
       } catch {
         // The project and its images exist; the workspace is where the user can send the brief again.
       }
@@ -130,13 +155,26 @@ export function NewProject({ preset }: { preset: PresetId }) {
 
   return (
     <div className="page form-page">
-      <a className="back" href="/" onClick={(e) => { e.preventDefault(); navigate("/"); }}>← All presets</a>
+      <a className="back" href={styled ? "/library" : "/"} onClick={(e) => { e.preventDefault(); navigate(styled ? "/library" : "/"); }}>{styled ? "← Library" : "← All presets"}</a>
       <div className="form-head">
         <Icon name={ui.icon} size={56} />
         <h1 className="display">{ui.label}</h1>
       </div>
 
       {caps && !ok && <CapabilityPanel caps={caps} checking={checking} onRecheck={recheck} />}
+      {styled && (
+        <section className="style-note" aria-label="Series style">
+          {source?.current ? <img src={api.renderUrl(source.id, source.current)} alt="" width={160} /> : null}
+          <div>
+            <strong>New in the style of “{source?.title ?? "…"}”</strong>
+            <p className="muted small">
+              The same {fmtSize(source?.size ?? { width: 0, height: 0 })} canvas, and Claude will match its layout, type and colours. Only the content changes.
+              {source ? (source.series ? " It joins the same series." : " A series named after it is created.") : ""}
+            </p>
+            {sourceError && <p className="field-error" role="alert">{sourceError}</p>}
+          </div>
+        </section>
+      )}
 
       <form
         className="form"
@@ -148,7 +186,7 @@ export function NewProject({ preset }: { preset: PresetId }) {
         <fieldset disabled={busy} className="fields">
           {preset === "thumbnail" && (
             <>
-              <div className="field">
+              {!styled && <div className="field">
                 <span className="label">Format</span>
                 <div className="seg" role="radiogroup" aria-label="Thumbnail format">
                   {THUMBNAIL_FORMATS.map((f) => (
@@ -158,7 +196,7 @@ export function NewProject({ preset }: { preset: PresetId }) {
                     </button>
                   ))}
                 </div>
-              </div>
+              </div>}
               <label className="field">
                 <span className="label">Title or topic</span>
                 <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="I built a rocket in my garage" autoFocus />
@@ -175,6 +213,7 @@ export function NewProject({ preset }: { preset: PresetId }) {
                 <span className="label">Notes <em>optional</em></span>
                 <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Keep it clean. A rocket in the background would be great." />
               </label>
+              {!styled && <SeriesField series={allSeries} choice={seriesChoice} name={seriesName} onChoice={setSeriesChoice} onName={setSeriesName} />}
             </>
           )}
 
@@ -188,7 +227,7 @@ export function NewProject({ preset }: { preset: PresetId }) {
                 <span className="label">What should happen to it?</span>
                 <textarea rows={3} value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="Warm up the colours and crop it tighter around the dog." />
               </label>
-              <div className="field">
+              {!styled && <div className="field">
                 <span className="label">Shape</span>
                 <div className="seg" role="radiogroup" aria-label="Aspect ratio">
                   {aspects.map((a) => (
@@ -197,7 +236,7 @@ export function NewProject({ preset }: { preset: PresetId }) {
                     </button>
                   ))}
                 </div>
-              </div>
+              </div>}
             </>
           )}
 
@@ -207,7 +246,7 @@ export function NewProject({ preset }: { preset: PresetId }) {
                 <span className="label">What do you need?</span>
                 <textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="A poster for our spring plant sale: friendly, lots of green, date and place at the bottom." autoFocus />
               </label>
-              <div className="field">
+              {!styled && <div className="field">
                 <span className="label">Size</span>
                 <select aria-label="Size" className="size-select" value={sizeId} onChange={(e) => setSizeId(e.target.value)}>
                   {groups.map((g) => (
@@ -227,7 +266,7 @@ export function NewProject({ preset }: { preset: PresetId }) {
                     <span className={customOk ? "muted small" : "field-error"}>64 to 4096 pixels each side</span>
                   </div>
                 )}
-              </div>
+              </div>}
               <div className="field">
                 <span className="label">Reference images <em>optional</em></span>
                 <Dropzone files={files} onChange={setFiles} multiple busy={busy} status={fileNote} title="Drop references here" hint="a logo, a mood, a layout you like" />
@@ -264,18 +303,21 @@ function firstMessage(
   preset: PresetId,
   f: { title: string; colours: string; notes: string; instruction: string; description: string; size: Size | undefined },
   assets: string[],
+  inSeries = false,
 ): string {
   const list = assets.map((a) => `assets/${a}`).join(", ");
+  const series = inSeries ? " This is a new episode in a series: read the series style reference and match it exactly; change only the title and the imagery." : "";
   if (preset === "thumbnail") {
     return [
       `Make a YouTube thumbnail for: ${sentence(f.title)}`,
       assets.length ? `My face photos are ${list}; use them.` : "",
       f.colours.trim() ? `Channel colours: ${sentence(f.colours)}` : "",
       f.notes.trim(),
+      series.trim(),
     ].filter(Boolean).join(" ");
   }
-  if (preset === "photo") return `Edit my photo (${list}): ${f.instruction.trim()}`;
-  return [f.description.trim(), assets.length ? `Reference images: ${list}.` : ""].filter(Boolean).join(" ");
+  if (preset === "photo") return `Edit my photo (${list}): ${f.instruction.trim()}${series}`;
+  return [f.description.trim(), assets.length ? `Reference images: ${list}.` : "", series.trim()].filter(Boolean).join(" ");
 }
 
 /** A project name from free text: its first clause, cut at a word boundary rather than mid-word. */

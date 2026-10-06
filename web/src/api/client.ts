@@ -49,7 +49,29 @@ const filenameHeader = (name: string) => enc(name || "pasted.png");
 export const realApi: Api = {
   capabilities: () => call("/api/capabilities"),
   presets: () => call("/api/presets"),
-  listProjects: () => call("/api/projects"),
+  listProjects: (q = {}) => {
+    const params = new URLSearchParams();
+    if (q.query?.trim()) params.set("query", q.query.trim());
+    if (q.preset) params.set("preset", q.preset);
+    if (q.series) params.set("series", q.series);
+    if (q.starred) params.set("starred", "1");
+    if (q.sort) params.set("sort", q.sort);
+    if (q.offset) params.set("offset", String(q.offset));
+    if (q.limit) params.set("limit", String(q.limit));
+    const qs = params.toString();
+    return call(`/api/projects${qs ? `?${qs}` : ""}`);
+  },
+  patchProject: (id, patch) => call(`/api/projects/${enc(id)}`, json("PATCH", patch)),
+  duplicateProject: (id) => call(`/api/projects/${enc(id)}/duplicate`, json("POST", {})),
+  newInStyle: (id, body) => call(`/api/projects/${enc(id)}/new-in-style`, json("POST", body)),
+  bulk: (action, ids, series) => call("/api/projects/bulk", json("POST", { action, ids, ...(series !== undefined && { series }) })),
+  exportZipUrl: (ids) => `/api/projects/export.zip?ids=${ids.map(enc).join(",")}`,
+  listSeries: () => call("/api/series"),
+  createSeries: (name) => call("/api/series", json("POST", { name })),
+  updateSeries: (id, patch) => call(`/api/series/${enc(id)}`, json("PATCH", patch)),
+  deleteSeries: async (id) => {
+    await call(`/api/series/${enc(id)}`, { method: "DELETE" });
+  },
   createProject: (body: CreateBody) => call("/api/projects", json("POST", body)),
   getProject: (id) => call(`/api/projects/${enc(id)}`),
   deleteProject: async (id) => {

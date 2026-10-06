@@ -183,7 +183,7 @@ test("end to end: create, upload, message, render, restore, export", { timeout: 
     assert.equal((await fetch(`${t.base}${jpg.body.url}`)).status, 200);
 
     const list = (await t.api("GET", "/api/projects")).body;
-    assert.equal(list[0].thumbnail, `/projects/${id}/renders/v1.png`);
+    assert.equal(list.items[0].thumbnail, `/projects/${id}/renders/v1.png`);
     assert.equal((await t.api("DELETE", `/api/projects/${id}`)).status, 200);
     assert.equal((await t.api("GET", `/api/projects/${id}`)).status, 404);
   } finally {

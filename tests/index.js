@@ -9,3 +9,4 @@ import "./errors.test.mjs";
 import "./presets.test.mjs";
 import "./further.test.mjs";
 import "./hardening.test.mjs";
+import "./library.test.mjs";
