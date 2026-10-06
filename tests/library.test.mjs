@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { crc32 } from "../server/zip.mjs";
-import { eventsDuring, makePng, startApp } from "./helpers.mjs";
+import { eventsDuring, makePng, startApp, tempDir } from "./helpers.mjs";
 
 const done = (e) => e.event === "run.finished" || e.event === "run.error";
 
@@ -187,7 +187,7 @@ test("duplicate: an independent copy with no session, versions and assets includ
 });
 
 test("a duplicate's first turn says design.html already holds the duplicated design", async (ctx) => {
-  const out = path.join(await fs.promises.mkdtemp(path.join((await import("node:os")).tmpdir(), "imago-dup-")), "calls.jsonl");
+  const out = path.join(tempDir("imago-dup-"), "calls.jsonl");
   process.env.FAKE_CLAUDE_ARGS_OUT = out;
   const t = await startApp();
   try {
@@ -216,7 +216,7 @@ test("a duplicate's first turn says design.html already holds the duplicated des
 });
 
 test("new in this style: reference files, series, and the series section in the system prompt", async (ctx) => {
-  const out = path.join(await fs.promises.mkdtemp(path.join((await import("node:os")).tmpdir(), "imago-style-")), "calls.jsonl");
+  const out = path.join(tempDir("imago-style-"), "calls.jsonl");
   process.env.FAKE_CLAUDE_ARGS_OUT = out;
   const t = await startApp();
   try {

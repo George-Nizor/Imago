@@ -12,8 +12,16 @@ export const FAKE_CLAUDE = path.join(here, "fixtures", "fake-claude.mjs");
 // A WSL image without Chromium's libraries prefers tools/chromium-libs (npm run setup:libs) and only then borrows Fabula's.
 const BORROWED_LIBS = path.resolve(here, "../../Fabula/tools/wsl-libs/usr/lib/x86_64-linux-gnu");
 
+// Every temp dir a test makes is removed when the test process exits, pass or fail.
+const made = [];
+process.on("exit", () => {
+  for (const dir of made) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 export function tempDir(prefix = "imago-test-") {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  made.push(dir);
+  return dir;
 }
 
 /** A server on an ephemeral port, its own data dir and the fake claude. */
