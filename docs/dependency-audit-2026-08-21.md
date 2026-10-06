@@ -1,5 +1,9 @@
 # Imago MCP dependency audit — 2026-08-21
 
+Historical: the MCP server this audit covered was removed when Imago was rebuilt as an AI designer
+(2026-10-06). The advisories came from `@imgly/background-removal-node`, which Imago still uses for
+`cut_out`; re-run the audit before relying on it.
+
 This is a dated package-manager result for the local MCP server. It is not a permanent claim about
 future lockfiles.
 

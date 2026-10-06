@@ -1,0 +1,120 @@
+{
+  "families": [
+    {
+      "family": "Anton",
+      "file": "Anton.ttf",
+      "weights": [
+        400
+      ],
+      "variable": false,
+      "role": "display",
+      "category": "sans",
+      "note": "Tall condensed poster face; thumbnail headlines."
+    },
+    {
+      "family": "Archivo Black",
+      "file": "ArchivoBlack.ttf",
+      "weights": [
+        400
+      ],
+      "variable": false,
+      "role": "display",
+      "category": "sans",
+      "note": "Wide heavy grotesque; punchy labels."
+    },
+    {
+      "family": "Bebas Neue",
+      "file": "BebasNeue.ttf",
+      "weights": [
+        400
+      ],
+      "variable": false,
+      "role": "display",
+      "category": "sans",
+      "note": "All-caps condensed; titles and tags."
+    },
+    {
+      "family": "Cinzel",
+      "file": "Cinzel.ttf",
+      "weights": [
+        400,
+        900
+      ],
+      "variable": true,
+      "role": "display",
+      "category": "serif",
+      "note": "Roman capitals; cinematic and epic."
+    },
+    {
+      "family": "DM Serif Display",
+      "file": "DMSerifDisplay.ttf",
+      "weights": [
+        400
+      ],
+      "variable": false,
+      "role": "display",
+      "category": "serif",
+      "note": "High-contrast display serif; editorial."
+    },
+    {
+      "family": "Inter",
+      "file": "Inter.ttf",
+      "weights": [
+        100,
+        900
+      ],
+      "variable": true,
+      "role": "text",
+      "category": "sans",
+      "note": "Neutral interface sans, nine weights."
+    },
+    {
+      "family": "Oswald",
+      "file": "Oswald.ttf",
+      "weights": [
+        200,
+        700
+      ],
+      "variable": true,
+      "role": "display",
+      "category": "sans",
+      "note": "Condensed gothic, six weights."
+    },
+    {
+      "family": "Playfair Display",
+      "file": "PlayfairDisplay.ttf",
+      "weights": [
+        400,
+        900
+      ],
+      "variable": true,
+      "role": "display",
+      "category": "serif",
+      "note": "Elegant transitional serif, italics via synthesis only."
+    },
+    {
+      "family": "Rubik",
+      "file": "Rubik.ttf",
+      "weights": [
+        300,
+        900
+      ],
+      "variable": true,
+      "role": "text",
+      "category": "sans",
+      "note": "Soft rounded-corner sans, friendly."
+    },
+    {
+      "family": "Space Grotesk",
+      "file": "SpaceGrotesk.ttf",
+      "weights": [
+        300,
+        700
+      ],
+      "variable": true,
+      "role": "text",
+      "category": "sans",
+      "note": "Geometric grotesk with character; tech."
+    }
+  ]
+}

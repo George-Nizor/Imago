@@ -30,3 +30,4 @@ exports/
 mcp/node_modules/
 mcp/dist/
 mcp/fonts/*.zip
+tools/

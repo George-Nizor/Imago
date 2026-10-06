@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "imago": {
-      "command": "node",
-      "args": ["mcp/dist/mcp/src/index.js"],
-      "cwd": "${workspaceFolder}"
-    }
-  }
-}
