@@ -36,8 +36,8 @@ Scripts: `npm start` (server), `npm run dev` (server and Vite together, Vite pro
 
 ## Runtime
 
-- `PORT` and `HOST` come from the environment. The launcher sets `HOST=127.0.0.1` and a port; the
-  default is `127.0.0.1:49321`. Never listen on anything but loopback.
+- `PORT` comes from the environment (default `49321`). The server always binds `127.0.0.1`; there is
+  no `HOST` setting. Never listen on anything but loopback.
 - `IMAGO_WEB_ROOT` is the built UI, `web/dist` by default, resolved against the package root.
 - `IMAGO_DATA_DIR` holds the projects (`projects/`), `series.json` and the trash (`projects/.trash/`), `~/.local/share/imago` by default.
 - `IMAGO_CLAUDE_BIN` is `claude` by default. Tests point it at `tests/fixtures/fake-claude.mjs`.
