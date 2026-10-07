@@ -8,52 +8,9 @@ Design thumbnails, photo edits and graphics with your own Claude Code. You descr
 and Claude writes it as HTML, CSS and SVG, looks at its own render, and fixes what is wrong. You ask
 for changes in plain words and export a PNG, JPG or WebP.
 
-Current version: **0.2.0**. Imago 0.2.0 replaced the earlier Konva layer editor and its 34-tool MCP
-server; the old document model is gone.
+Version 0.2.0. It runs from source and needs Claude Code signed in; see [Requirements](#requirements).
 
 ![Imago workspace with a finished thumbnail](docs/images/screenshots/03-workspace-dark.png)
-
-## Presets
-
-| Preset | Starts from | Sizes |
-| --- | --- | --- |
-| YouTube thumbnail | The video's title or topic, optional channel colours, notes and face photos (cut out locally). | Video 16:9, Shorts 9:16 or Podcast 1:1. Designed at 1280 on the long side and exported at 3× (3840×2160, YouTube's current recommendation) as JPG by default |
-| Edit a photo | One uploaded photo and an instruction. | The photo's own shape or one of ten crops (1:1, 4:5, 3:4, 2:3, 9:16, 4:3, 3:2, 16:9, 21:9). A crop always fits inside the photo, so it is never upscaled |
-| Custom graphic | A description and optional reference images. | 32 named sizes grouped by platform (Instagram, Facebook, X, LinkedIn, YouTube, TikTok, Pinterest, Twitch, Discord, web, print at 150 dpi, screens) or any size from 64 to 4096 per side |
-
-Exports go up to 8192 px on the long side. After a thumbnail export Imago shows the file size and
-warns when it is over 2 MB, the limit for uploads from the YouTube mobile app (desktop allows 50 MB).
-
-![The thumbnail form, light theme](docs/images/screenshots/05-form-thumbnail-light.png)
-
-Each turn shows Claude Code's cost estimate (`total_cost_usd`). That is an API-price figure. On a
-subscription nothing is charged for it; it is there so you can see what a turn weighs. Ordinary turns
-seen so far cost roughly $0.06 to $0.21 at API rates, and Take it further turns on Opus $0.28 to $0.90.
-
-## Take it further
-
-Ordinary turns run on Sonnet 5.5 at medium effort: quick and light on your plan. When a result is
-not there yet, **Take it further** continues the same conversation on Opus 5.5 (the default) or
-Fable 5.1 at high effort, with up to eight render-and-critique rounds, web search, and openly licensed
-stock images from Openverse (credits are kept and shown with the design). Fable uses the most of
-your plan. Anything typed in the message box goes along as direction.
-
-![A design after Take it further on Fable 5.1, with the model badge on the turn](docs/images/screenshots/04-take-it-further-dark.png)
-
-## Library and series
-
-The Start screen shows the latest designs; **Library** holds all of them, with search, filters by
-preset, series and starred, sorting, and loading forty at a time. Each design can be renamed,
-starred, duplicated, moved to a series or deleted (with Undo; deleted designs are kept in a trash
-folder for seven days). Select mode adds shift-click ranges and a bulk bar for delete, star, move and
-downloading the renders as a zip.
-
-A **series** keeps a channel's look consistent. **New in this style** starts a new design in the same
-series with the source's render and HTML as a style reference, so the layout, type, colours and
-badges carry over and only the episode's content changes. Only channel settings (colours, format)
-carry over from the source's brief, never its episode notes.
-
-![The library filtered to designs without a series](docs/images/screenshots/02-library-dark.png)
 
 ## Requirements
 
@@ -81,16 +38,59 @@ npm start         # server on http://127.0.0.1:49321
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PORT`, `HOST` | `49321`, `127.0.0.1` | Imago only listens on loopback. |
+| `PORT` | `49321` | Imago listens on `127.0.0.1` only. |
 | `IMAGO_DATA_DIR` | `~/.local/share/imago` | Where projects live. |
 | `IMAGO_MODEL` | `claude-sonnet-5-5` | Model passed to `claude`. |
 | `IMAGO_EFFORT` | `medium` | Effort passed to `claude`. |
 | `IMAGO_TURN_TIMEOUT_MS` | `600000` | A turn that runs longer is killed. |
+| `IMAGO_FURTHER_MODELS`, `IMAGO_FURTHER_EFFORT` | `opus=claude-opus-5-5,fable=claude-fable-5-1`, `high` | Models and effort for Take it further. |
 | `IMAGO_CLAUDE_BIN` | `claude` | The Claude Code executable. |
 
 Each project is a folder under `<IMAGO_DATA_DIR>/projects/<id>/` holding `project.json`,
 `design.html`, `assets/`, one snapshot and render per version, and `exports/`. Delete a project in
 the app or delete its folder.
+
+## Presets
+
+| Preset | Starts from | Sizes |
+| --- | --- | --- |
+| YouTube thumbnail | The video's title or topic, optional channel colours, notes and face photos (cut out locally). | Video 16:9, Shorts 9:16 or Podcast 1:1. Designed at 1280 on the long side and exported at 3× (3840×2160, YouTube's current recommendation) as JPG by default |
+| Edit a photo | One uploaded photo and an instruction. | The photo's own shape or one of nine crops (1:1, 4:5, 3:4, 2:3, 9:16, 4:3, 3:2, 16:9, 21:9). A crop always fits inside the photo, so it is never upscaled |
+| Custom graphic | A description and optional reference images. | 32 named sizes grouped by platform (social networks, web, print at 150 dpi, screens) or any size from 64 to 4096 per side |
+
+Exports go up to 8192 px on the long side. After a thumbnail export Imago shows the file size and
+warns when it is over 2 MB, the limit for uploads from the YouTube mobile app (desktop allows 50 MB).
+
+![The thumbnail form, light theme](docs/images/screenshots/05-form-thumbnail-light.png)
+
+Each turn shows Claude Code's cost estimate (`total_cost_usd`). That is an API-price figure. On a
+subscription nothing is charged for it; it is there so you can see what a turn weighs.
+
+## Take it further
+
+Ordinary turns run on Sonnet 5.5 at medium effort: quick and light on your plan. When a result is
+not there yet, **Take it further** continues the same conversation on Opus 5.5 (the default) or
+Fable 5.1 at high effort, with up to eight renders, web search, and openly licensed stock images from
+Openverse (credits are kept and shown with the design). Fable uses the most of your plan. Anything
+typed in the message box goes along as direction. The models and effort are set by
+`IMAGO_FURTHER_MODELS` and `IMAGO_FURTHER_EFFORT`.
+
+![A design after Take it further on Fable 5.1, with the model badge on the turn](docs/images/screenshots/04-take-it-further-dark.png)
+
+## Library and series
+
+The Start screen shows the latest designs; **Library** holds all of them, with search, filters by
+preset, series and starred, sorting, and loading forty at a time. Each design can be renamed,
+starred, duplicated, moved to a series or deleted (with Undo; deleted designs are kept in a trash
+folder for seven days). Select mode adds shift-click ranges and a bulk bar for delete, star, move and
+downloading the renders as a zip.
+
+A **series** keeps a channel's look consistent. **New in this style** starts a new design in the same
+series with the source's render and HTML as a style reference, so the layout, type, colours and
+badges carry over and only the episode's content changes. Only channel settings (colours, format)
+carry over from the source's brief, never its episode notes.
+
+![The library filtered to designs without a series](docs/images/screenshots/02-library-dark.png)
 
 ## The design rules
 
@@ -142,11 +142,11 @@ The tests never call the real Claude. `tests/fixtures/fake-claude.mjs` stands in
 it writes a design, renders it through the real render MCP and prints stream-json, so no usage is
 spent. Developer notes are in [CLAUDE.md](CLAUDE.md).
 
-## Licence and family
+## Licence
 
-Imago is MIT licensed (see [LICENSE](LICENSE)). Bundled fonts and libraries keep their own licences; the
-interface type (Fraunces, Commissioner, Spline Sans Mono) is SIL OFL 1.1, copied with its licence files.
+Imago is MIT licensed (see [LICENSE](LICENSE)). The content fonts in `fonts/` and the bundled libraries
+keep their own licences.
 
-Imago is part of [Instrumenta](https://github.com/George-Nizor/Instrumenta), made by
-Bonehead Labs, and follows the Instrumenta brand v2: a teal framed
-picture with a sparkle, drawn as a freestanding object.
+---
+
+<sub>Part of [Instrumenta](https://github.com/George-Nizor/Instrumenta), made by [Bonehead Labs](https://boneheadlabs.org). Brand v2: teal, a framed picture with a sparkle, interface type Fraunces, Commissioner and Spline Sans Mono (SIL OFL 1.1, vendored in `web/public/brand/fonts/` with their licences). Licence: MIT.</sub>
