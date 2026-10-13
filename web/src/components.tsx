@@ -30,6 +30,16 @@ export function Header({ trail }: { trail?: string }) {
       >
         Library
       </a>
+      <a
+        className="nav-link"
+        href="/faces"
+        onClick={(e) => {
+          e.preventDefault();
+          navigate("/faces");
+        }}
+      >
+        Faces
+      </a>
       <button
         type="button"
         className="icon-btn"

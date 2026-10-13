@@ -448,3 +448,43 @@ input:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent); 
 .set-chip { margin-top: 6px; }
 .covers { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
 .covers .platforms { flex-direction: column; gap: 4px; }
+
+/* Faces: the owner's face pack */
+.faces .lede { margin: 0; color: var(--muted); max-width: 64ch; }
+.faces-drop { align-items: center; }
+.faces-progress { display: flex; align-items: center; gap: 12px; font-size: 0.9375rem; }
+.faces-progress progress { flex: 1; max-width: 280px; accent-color: var(--accent); }
+.faces-mirror { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); font-size: 0.9375rem; }
+.faces-mirror input, .check input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--accent); flex: none; }
+.check { display: inline-flex; align-items: center; gap: 8px; font-size: 0.9375rem; }
+.faces-filters .spacer, .dialog-actions .spacer { flex: 1; }
+.faces-empty p { max-width: 62ch; }
+.faces-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
+.face-card { display: flex; flex-direction: column; background: var(--raised); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.face-card.is-hidden { opacity: 0.55; }
+.face-pic { position: relative; display: block; width: 100%; aspect-ratio: 4 / 5; padding: 0; border: 0; cursor: pointer; color: inherit;
+  background: var(--stage) conic-gradient(color-mix(in oklab, var(--stage) 88%, white) 25%, var(--stage) 0 50%, color-mix(in oklab, var(--stage) 88%, white) 0 75%, var(--stage) 0) 0 0 / 24px 24px; }
+.face-pic img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.face-pic:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+.face-busy { position: absolute; inset: auto 0 0 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px; font-size: 0.8125rem; font-weight: 600; background: color-mix(in oklab, var(--bg) 82%, transparent); }
+.face-busy.is-bad { color: var(--danger); }
+.grade { position: absolute; top: 8px; left: 8px; font: 700 0.75rem var(--mono); padding: 2px 7px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); }
+.grade-4k { color: var(--accent-text); border-color: var(--accent); }
+.grade-soft { color: var(--danger); }
+.face-meta { display: flex; flex-direction: column; gap: 6px; padding: 10px 10px 8px; }
+.face-labels { display: flex; flex-direction: column; font-size: 0.875rem; min-height: 2.6em; }
+.face-labels strong { text-transform: capitalize; }
+.face-actions { display: flex; align-items: center; gap: 4px; }
+.face-actions .is-on { color: var(--accent-text); }
+.face-hide { min-height: 32px; padding: 4px 10px; font-size: 0.8125rem; margin-right: auto; margin-left: 4px; }
+.face-edit { display: grid; grid-template-columns: minmax(150px, 220px) 1fr; gap: 20px; }
+.face-edit-pic img { width: 100%; border-radius: 10px; background: var(--stage); }
+.face-edit-form { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.face-edit-form select, .face-edit-form input[type="text"] { width: 100%; }
+.dialog-actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; }
+@media (max-width: 640px) { .face-edit { grid-template-columns: 1fr; } }
+.dialog:has(.face-edit) { width: min(720px, 100%); }
+.face-pack-note { margin: 0; padding: 10px 14px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; background: var(--raised); font-size: 0.9375rem; }
+.face-pack-note a { color: var(--accent-text); }
+.face-edit-form select, .face-edit-form input[type="text"] { font: 500 0.9rem var(--ui); color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-height: 40px; }
+.face-edit-form .field > span:first-child { font-weight: 600; font-size: 0.875rem; }

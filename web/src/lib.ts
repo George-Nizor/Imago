@@ -3,13 +3,14 @@ import { ApiError } from "./api/client.js";
 import type { PresetId, Size } from "./api/types.js";
 
 // ---- routing: five paths, no library ----
-export type Route = { name: "start" } | { name: "library" } | { name: "new"; preset: PresetId; style?: string } | { name: "project"; id: string } | { name: "compare"; id: string };
+export type Route = { name: "start" } | { name: "library" } | { name: "faces" } | { name: "new"; preset: PresetId; style?: string } | { name: "project"; id: string } | { name: "compare"; id: string };
 
 export function parseRoute(path: string, search = ""): Route {
   const parts = path.split("/").filter(Boolean);
   if (parts[0] === "new" && (parts[1] === "thumbnail" || parts[1] === "photo" || parts[1] === "graphic"))
     return { name: "new", preset: parts[1], style: new URLSearchParams(search).get("style") ?? undefined };
   if (parts[0] === "library" && !parts[1]) return { name: "library" };
+  if (parts[0] === "faces" && !parts[1]) return { name: "faces" };
   if (parts[0] === "p" && parts[1]) return { name: "project", id: decodeURIComponent(parts[1]) };
   if (parts[0] === "c" && parts[1]) return { name: "compare", id: decodeURIComponent(parts[1]) };
   return { name: "start" };

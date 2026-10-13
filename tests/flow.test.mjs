@@ -125,7 +125,7 @@ test("end to end: create, upload, message, render, restore, export", { timeout: 
     assert.equal(arg("--tools"), "Read,Write,Edit,Glob");
     assert.equal(arg("--permission-mode"), "dontAsk");
     assert.equal(arg("--permission-prompts"), "none");
-    assert.equal(arg("--allowedTools"), "Read(./**),Glob(./**),Write(./design.html),Edit(./design.html),mcp__imago__render,mcp__imago__cut_out");
+    assert.equal(arg("--allowedTools"), "Read(./**),Glob(./**),Write(./design.html),Edit(./design.html),mcp__imago__render,mcp__imago__cut_out,mcp__imago__find_faces,mcp__imago__use_face");
     const denied = arg("--disallowedTools").split(",");
     for (const rule of ["Bash", "WebFetch", "WebSearch", "Write(./project.json)", "Edit(./versions/**)", "Write(./renders/**)", "Edit(./exports/**)"]) assert.ok(denied.includes(rule), rule);
     assert.ok(!call.argv.includes("--append-system-prompt"), "the prompt is not on the command line");

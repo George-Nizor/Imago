@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { SpawnError, runProcess } from "./process.mjs";
 import { registerCutout, syncAssets } from "./assets.mjs";
 import { fontFamilies, highestVersion } from "./design-files.mjs";
-import { buildFirstPrompt, buildSystemPrompt, conceptSection, installCraft, plannerSection } from "./presets/index.mjs";
+import { buildFirstPrompt, buildSystemPrompt, conceptSection, facesClassifySection, installCraft, plannerSection } from "./presets/index.mjs";
 import { kitPromptSection } from "./kits.mjs";
 import { SIGNED_OUT, interpretLine, summarizeTool } from "./stream-json.mjs";
 import { electronEnv } from "./renderer.mjs";
@@ -16,7 +16,7 @@ import { formatOf } from "./feed.mjs";
 // Built-in tools a turn can use (`--tools`; MCP tools are not built in, so they live in --allowedTools only).
 const STANDARD_TOOLS = "Read,Write,Edit,Glob";
 const FURTHER_TOOLS = `${STANDARD_TOOLS},WebSearch`;
-const MCP_STANDARD = "mcp__imago__render,mcp__imago__cut_out";
+const MCP_STANDARD = "mcp__imago__render,mcp__imago__cut_out,mcp__imago__find_faces,mcp__imago__use_face";
 const MCP_FURTHER = `${MCP_STANDARD},mcp__imago__search_images,mcp__imago__fetch_image`;
 // Permission rules (relative to the project folder, which is the working directory). Reads stay in the
 // folder; the only file Claude may write is design.html. Everything else is the server's or the renderer's.
@@ -213,7 +213,7 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
         seen.assistant = true;
         toolNames.set(ev.id, ev.name);
         if (ev.name === "mcp__imago__render") renderCalls.add(ev.id);
-        if (ev.name === "mcp__imago__cut_out" || ev.name === "mcp__imago__fetch_image") assetCalls.set(ev.id, ev.name);
+        if (["mcp__imago__cut_out", "mcp__imago__fetch_image", "mcp__imago__use_face"].includes(ev.name)) assetCalls.set(ev.id, ev.name);
         emit("tool.use", { name: ev.name, summary: summarizeTool(ev.name, ev.input) });
       } else if (ev.kind === "tool_result") {
         if (renderCalls.delete(ev.toolUseId) && !ev.isError) {
@@ -421,6 +421,73 @@ export async function runPlanner({ config, dir, prompt, count, format, signal, o
     if (outcome.spawnError) return { ok: false, costUsd, failure: { code: "CLAUDE_MISSING", message: `Claude Code could not be started (${config.claudeBin}).` } };
     if (outcome.aborted) return { ok: false, costUsd, failure: { code: "CANCELLED", message: "The planning turn was cancelled." } };
     if (outcome.timedOut) return { ok: false, costUsd, failure: { code: "TIMEOUT", message: `Planning did not finish within ${Math.round(config.turnTimeoutMs / 1000)} seconds.` } };
+    if (result?.isError) return { ok: false, costUsd, failure: SIGNED_OUT.test(result.text) ? SIGNED_OUT_FAILURE : { code: "EXITED", message: result.text || "Claude reported an error." } };
+    if (!result) return { ok: false, costUsd, failure: SIGNED_OUT.test(outcome.stderr) ? SIGNED_OUT_FAILURE : { code: "EXITED", message: `Claude exited without an answer. ${outcome.stderr.slice(-300)}`.trim() } };
+    return { ok: true, costUsd };
+  } finally {
+    await rm(promptDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// ---- the face classifier: one locked-down turn per batch, in a folder holding only that batch ------
+
+// Reads the batch's images and contact sheet, writes one file. No MCP, no render, no network.
+const FACES_TOOLS = "Read,Write,Glob";
+const FACES_ALLOWED = "Read(./**),Glob(./**),Write(./labels.json)";
+const FACES_DISALLOWED = `Bash,WebFetch,WebSearch,Task,NotebookEdit,Edit,${["./images/**", "./sheet.png"].map((p) => `Write(${p})`).join(",")}`;
+
+/** The classifier's `claude -p` arguments: the planner's lock-down on the faces model at low effort. */
+export function buildFacesArgs(config, systemFile = "<system-prompt-file>") {
+  return [
+    "-p",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--model", config.facesModel,
+    "--effort", config.facesEffort,
+    "--restricted",
+    "--setting-sources", "",
+    "--strict-mcp-config",
+    "--mcp-config", JSON.stringify({ mcpServers: {} }),
+    "--tools", FACES_TOOLS,
+    "--permission-mode", "dontAsk",
+    "--permission-prompts", "none",
+    "--disable-slash-commands",
+    "--allowedTools", FACES_ALLOWED,
+    "--disallowedTools", FACES_DISALLOWED,
+    "--append-system-prompt-file", systemFile,
+  ];
+}
+
+/** Runs the classification turn in `dir` (images/, sheet.png) and leaves labels.json there. Never throws, never resumes. */
+export async function runFacesClassifier({ config, dir, count, signal }) {
+  const promptDir = await mkdtemp(path.join(os.tmpdir(), "imago-prompt-"));
+  const promptFile = path.join(promptDir, "system.md");
+  const seen = { result: null };
+  try {
+    await writeFile(promptFile, facesClassifySection({ count }), { mode: 0o600 });
+    const prompt = `Label the ${count} photo${count === 1 ? "" : "s"} in images/ (sheet.png is the numbered contact sheet when it exists) and write labels.json.`;
+    let outcome;
+    try {
+      outcome = await runProcess({
+        binary: config.claudeBin,
+        args: buildFacesArgs(config, promptFile),
+        cwd: dir,
+        stdin: prompt,
+        env: electronEnv(config),
+        timeoutMs: config.turnTimeoutMs,
+        signal,
+        onStdoutLine: (line) => {
+          for (const ev of interpretLine(line)) if (ev.kind === "result") seen.result = ev;
+        },
+      });
+    } catch (error) {
+      outcome = { spawnError: error instanceof SpawnError ? error : new SpawnError(config.claudeBin, error) };
+    }
+    const costUsd = seen.result?.costUsd ?? 0;
+    const { result } = seen;
+    if (outcome.spawnError) return { ok: false, costUsd, failure: { code: "CLAUDE_MISSING", message: "Claude Code could not be started." } };
+    if (outcome.aborted) return { ok: false, costUsd, failure: { code: "CANCELLED", message: "Classification was cancelled." } };
+    if (outcome.timedOut) return { ok: false, costUsd, failure: { code: "TIMEOUT", message: `Classification did not finish within ${Math.round(config.turnTimeoutMs / 1000)} seconds.` } };
     if (result?.isError) return { ok: false, costUsd, failure: SIGNED_OUT.test(result.text) ? SIGNED_OUT_FAILURE : { code: "EXITED", message: result.text || "Claude reported an error." } };
     if (!result) return { ok: false, costUsd, failure: SIGNED_OUT.test(outcome.stderr) ? SIGNED_OUT_FAILURE : { code: "EXITED", message: `Claude exited without an answer. ${outcome.stderr.slice(-300)}`.trim() } };
     return { ok: true, costUsd };

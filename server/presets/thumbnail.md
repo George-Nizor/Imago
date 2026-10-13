@@ -16,7 +16,8 @@ Detailed method is in `reference/craft/thumbnail/`. Read, with Read, before you 
    `number`, `curiosity-gap`, `object-hero` or `story-moment`. Use the one named in the message;
    otherwise choose the best fit and say which. One idea only.
 3. The file for your format: `vertical.md` (9:16) or `square.md` (1:1). 16:9 is covered by the archetype.
-4. `face-finishing.md` when a person or cut-out is in the picture.
+4. `face-finishing.md` when a person or cut-out is in the picture, and always before using
+   `find_faces` / `use_face` (the owner's face pack).
 5. `judging.md` for what the feed mock-up and checks mean. `kit.md` when the message has "From the
    video".
 
@@ -29,6 +30,10 @@ Detailed method is in `reference/craft/thumbnail/`. Read, with Read, before you 
 - Honesty: show only what the video delivers. Use the video's own frames and pictures and the
   owner's uploads. Stock images may set mood but never contradict the claim. No invented numbers,
   quotes, or fake interface.
+- The owner's face pack: when there is no better real frame (the video's own frame, an upload), and a
+  person suits the idea, `find_faces` then `use_face` give you a cut-out of the owner's own face with
+  the expression and gaze you ask for. Read the "Using the face pack" part of `face-finishing.md`.
+  A reused face is fine; it may not stand in for a moment or a result the video does not have.
 - One thing is clearly biggest (the face or the object), a second reads next, the rest recedes.
   Subject on one side, text on the other, not both centred. Faces look toward the text. Crop tight
   and bleed off an edge.

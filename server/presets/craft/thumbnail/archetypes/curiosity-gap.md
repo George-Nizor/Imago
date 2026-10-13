@@ -7,6 +7,10 @@ The video has a secret, a mystery, a surprising cause or an unexpected ending, a
 a hook gives the question. The gap must be answered by the video; hiding something the video does
 not show is bait.
 
+## Face source
+When a person points or looks at the hidden thing, a pack face with a matching gesture (`point-left`,
+`point-right`, `point-camera`, `hand-on-chin`, `thinking`) and a gaze toward the gap works; match the side.
+
 ## Layout
 - 16:9: the subject is partially hidden, blurred, covered or cropped: a bar or a blur on part of
   it, an object in a box, a silhouette, a hand pointing at a detail with a ring around it, or an

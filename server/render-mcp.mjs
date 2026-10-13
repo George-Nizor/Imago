@@ -12,6 +12,9 @@ import { highestVersion, validateDesignFile } from "./design-files.mjs";
 import { stageFeed } from "./feed.mjs";
 import { renderHtml } from "./renderer.mjs";
 import { fetchStockImage, searchImages } from "./stock.mjs";
+import { EXPRESSIONS, GAZES, GESTURES, GRADES, availability, facesRoot, rankFaces, readAllFaces, readSettings, summarize, takeFace } from "./face-pack.mjs";
+import { renderFaceSheet } from "./face-sheet.mjs";
+import os from "node:os";
 
 const projectDir = path.resolve(process.env.IMAGO_PROJECT_DIR ?? "");
 const config = loadConfig(process.env, process.env.IMAGO_FONTS_DIR ? { fontsDir: path.resolve(process.env.IMAGO_FONTS_DIR) } : {});
@@ -113,6 +116,65 @@ server.registerTool(
       return text(await fetchStockImage(projectDir, { url, credit, license, licenseUrl: license_url, source }));
     } catch (error) {
       return text(`fetch_image failed: ${error.message}`, true);
+    }
+  },
+);
+
+server.registerTool(
+  "find_faces",
+  {
+    description: "Look through the owner's face pack (their own photos, already cut out and labelled) for the best faces for this design. Returns the best matches, starred first, with their labels and quality grade, and a numbered contact sheet image of them. Gaze is in image terms: 'left' means the face looks toward the left edge. Then use_face the one you want.",
+    inputSchema: {
+      expression: z.enum(EXPRESSIONS).optional(),
+      gesture: z.enum(GESTURES).optional(),
+      gaze: z.enum(GAZES).optional().describe("Where the face looks in the image, so you know which side the text goes"),
+      minGrade: z.enum(GRADES).optional().describe("'4k' survives a 3x export filling half the canvas, 'hd' is fine up to 1.5x, 'soft' is anything"),
+      count: z.number().int().min(1).max(8).optional().describe("How many, 4 by default"),
+    },
+  },
+  async (query) => {
+    try {
+      const dataDir = process.env.IMAGO_DATA_DIR;
+      if (!dataDir) return text("The tool is not configured.", true);
+      const all = await readAllFaces(dataDir);
+      const settings = await readSettings(dataDir);
+      const found = rankFaces(all, { ...query, count: query.count ?? 4 });
+      const reply = { faces: found.map((f, i) => ({ n: i + 1, ...summarize(f, settings) })), packHas: availability(all) };
+      if (!found.length) {
+        reply.note = Object.keys(reply.packHas).length ? "No face matches those filters; loosen one (the pack has the expressions listed in packHas)." : "The face pack has no usable faces.";
+        return text(reply);
+      }
+      const content = [];
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "imago-find-faces-"));
+      try {
+        const out = path.join(dir, "sheet.png");
+        const items = found.map((f) => ({ file: path.join(facesRoot(dataDir), f.id, f.cutout.thumb ? "thumb.png" : "cutout.png"), label: `${f.id}`, caption: `${f.labels.expression} ${f.labels.intensity} · ${f.labels.gaze} · ${f.quality?.grade ?? "?"}${f.starred ? " · starred" : ""}` }));
+        if (await renderFaceSheet(config, items, { out, columns: Math.min(4, items.length), cell: 300, title: "Your face pack: best matches" })) content.push({ type: "image", data: (await fs.readFile(out)).toString("base64"), mimeType: "image/png" });
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+      return { content: [...content, { type: "text", text: JSON.stringify(reply) }] };
+    } catch (error) {
+      return text(`find_faces failed: ${error.message}`, true);
+    }
+  },
+);
+
+server.registerTool(
+  "use_face",
+  {
+    description: "Copy a face from the owner's face pack into assets/ as face-<id>.png (a transparent cut-out, ready to place) or, with mirror, as face-<id>-mirrored.png with the pixels flipped. Refused when mirroring is not allowed for that face. Returns the name and size.",
+    inputSchema: {
+      id: z.string().describe("A face id from find_faces"),
+      mirror: z.boolean().optional().describe("Flip it left to right so it looks toward the other side"),
+    },
+  },
+  async ({ id, mirror }) => {
+    try {
+      if (!process.env.IMAGO_PROJECT_DIR || !process.env.IMAGO_DATA_DIR) return text("The tool is not configured for a project.", true);
+      return text(await takeFace(process.env.IMAGO_DATA_DIR, projectDir, id, { mirror: mirror === true }));
+    } catch (error) {
+      return text(`use_face failed: ${error.message}`, true);
     }
   },
 );

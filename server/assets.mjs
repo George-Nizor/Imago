@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { EXTENSION, MAX_PIXELS, imageInfo, tooManyPixels } from "./image-info.mjs";
+import { FACE_ASSET } from "./face-pack.mjs";
 import { isSafeLeaf, sanitizeLeaf } from "./paths.mjs";
 import { photoSize } from "./presets/index.mjs";
 import { httpUrlOnly } from "./stock.mjs";
@@ -102,6 +103,12 @@ export async function syncAssets(store, id) {
       });
       continue;
     }
+    // use_face copies a pack face in under a name only it makes.
+    const face = FACE_ASSET.exec(name);
+    if (face) {
+      fresh.push({ name, kind: "face", width: info.width, height: info.height, from: null, faceId: face[1], mirrored: Boolean(face[2]) });
+      continue;
+    }
     const cut = /^(.+)-cutout(?:-\d+)?\.png$/.exec(name);
     const from = cut ? files.find((f) => f !== name && f.replace(/\.[^.]+$/, "") === cut[1]) ?? null : null;
     fresh.push({ name, kind: cut ? "cutout" : "upload", width: info.width, height: info.height, from });
@@ -122,5 +129,13 @@ export async function registerCutout(store, id, { name, width, height, from }) {
   await store.mutate(id, (project) => {
     project.assets = project.assets.filter((a) => a.name !== name);
     project.assets.push(inheritCredit({ name, kind: "cutout", width, height, from }, project.assets));
+  });
+}
+
+/** Registers a pack face that was copied into assets/ (by use_face, or by a concept set before its turn). */
+export async function registerFace(store, id, { name, width, height, faceId, mirrored = false }) {
+  await store.mutate(id, (project) => {
+    project.assets = project.assets.filter((a) => a.name !== name);
+    project.assets.push({ name, kind: "face", width, height, from: null, faceId, mirrored });
   });
 }

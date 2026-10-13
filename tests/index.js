@@ -13,3 +13,4 @@ import "./library.test.mjs";
 import "./checks.test.mjs";
 import "./feed.test.mjs";
 import "./render-feed.test.mjs";
+import "./faces.test.mjs";

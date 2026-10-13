@@ -11,6 +11,10 @@ import type {
   ConceptView,
   CreateBody,
   CreateSetBody,
+  FaceLabels,
+  FaceList,
+  FacePatch,
+  FaceView,
   KitSummary,
   PlatformId,
   SetEvent,
@@ -24,6 +28,7 @@ import type {
   TurnMode,
 } from "./types.js";
 import { ApiError } from "./client.js";
+import { EXPRESSIONS, GAZES, GESTURES } from "./types.js";
 import { ASPECTS, ASPECT_LABELS, GRAPHIC_SIZES, THUMBNAIL_FORMATS } from "../presets.js";
 
 const SIZES: Record<string, Size> = { thumbnail: { width: 1280, height: 720 }, photo: { width: 1620, height: 1080 }, graphic: { width: 1080, height: 1080 } };
@@ -584,6 +589,73 @@ export const mockApi: Api = {
       set!.delete(onEvent);
     };
   },
+  async listFaces() {
+    await wait(120);
+    return faceList();
+  },
+  async uploadFace(file) {
+    await wait(350);
+    const id = (++faceCounter).toString(16).padStart(8, "0");
+    const dims = await createImageBitmap(file).catch(() => null);
+    const f: FaceView = {
+      id, addedAt: new Date().toISOString(), filename: file.name, stage: "queued", error: "",
+      original: { width: dims?.width ?? 1600, height: dims?.height ?? 1200, url: "" },
+      cutout: { state: "queued", width: null, height: null, url: null, thumbUrl: null },
+      labels: null, labelsEditedByOwner: false, mirrorAllowed: null, quality: null, starred: false, hidden: false,
+    };
+    faces.unshift(f);
+    advanceFace(f);
+    return structuredClone(f);
+  },
+  async patchFace(id, patch: FacePatch) {
+    const f = needFace(id);
+    if (patch.starred !== undefined) f.starred = patch.starred;
+    if (patch.hidden !== undefined) f.hidden = patch.hidden;
+    if (patch.mirrorAllowed !== undefined) f.mirrorAllowed = patch.mirrorAllowed;
+    if (patch.labels) {
+      f.labels = { ...(f.labels ?? sampleLabels(0)), ...patch.labels };
+      f.labelsEditedByOwner = true;
+      if (f.stage === "unclassified") f.stage = "ready";
+      f.quality ??= { grade: "hd", faceHeightPx: 700, sharpness: 80 };
+    }
+    return structuredClone(f);
+  },
+  async deleteFace(id) {
+    const i = faces.findIndex((f) => f.id === id);
+    if (i >= 0) trashed.set(id, faces.splice(i, 1)[0]!);
+  },
+  async restoreFace(id) {
+    const f = trashed.get(id);
+    if (!f) throw new ApiError("NOT_FOUND", "That face is not in the trash.", 404);
+    trashed.delete(id);
+    faces.unshift(f);
+    return structuredClone(f);
+  },
+  async reclassifyFaces(ids) {
+    const changed: string[] = [];
+    const skipped: string[] = [];
+    for (const f of faces) {
+      if (ids && !ids.includes(f.id)) continue;
+      if (f.labelsEditedByOwner || f.cutout.state !== "done") skipped.push(f.id);
+      else {
+        f.stage = "classifying";
+        changed.push(f.id);
+        setTimeout(() => finishClassify(f, f.id.endsWith("7") ? "fail" : "ok"), 1600);
+      }
+    }
+    return { changed, skipped };
+  },
+  async recutFace(id) {
+    const f = needFace(id);
+    f.stage = "queued";
+    f.error = "";
+    advanceFace(f);
+    return structuredClone(f);
+  },
+  async setFaceSettings(settings) {
+    faceSettings = settings;
+    return settings;
+  },
   feedUrl: () => "",
   renderUrl: (id, n) => projects.get(id)?.renders[n] ?? "",
   designUrl(id, _nonce) {
@@ -605,4 +677,83 @@ function photoSize(source: Size, aspect: string): Size {
   const [a, b] = aspect.split(":").map(Number) as [number, number];
   const long = Math.min(cap, Math.max(source.width, source.height));
   return a >= b ? { width: long, height: Math.round((long * b) / a) } : { width: Math.round((long * a) / b), height: long };
+}
+
+// ---- the face pack (stand-in): a few drawn faces, and uploads that walk through cutting out and classifying ----
+let faceCounter = 100;
+let faceSettings = { mirrorAll: true };
+const trashed = new Map<string, FaceView>();
+const needFace = (id: string) => {
+  const f = faces.find((x) => x.id === id);
+  if (!f) throw new ApiError("NOT_FOUND", "No such face.", 404);
+  return f;
+};
+function sampleLabels(n: number): FaceLabels {
+  return {
+    expression: EXPRESSIONS[n % EXPRESSIONS.length]!, intensity: ((n % 3) + 1) as 1 | 2 | 3, gesture: GESTURES[(n * 5) % GESTURES.length]!, gaze: GAZES[n % GAZES.length]!,
+    headTurn: n % 3 === 2 ? "three-quarter" : "frontal", eyesOpen: true, textOrLogoInShot: n % 5 === 3, description: `Mock photo number ${n + 1}`,
+    faceBox: { x: 0.3, y: 0.1, w: 0.3, h: 0.5 },
+  };
+}
+const MOUTHS: Record<string, string> = {
+  smile: "M62 112 Q80 126 98 112", laugh: "M58 108 Q80 140 102 108 Z", surprise: "M72 112 a8 11 0 1 0 16 0 a8 11 0 1 0 -16 0", shock: "M70 108 a10 15 0 1 0 20 0 a10 15 0 1 0 -20 0",
+  excited: "M58 106 Q80 138 102 106 Z", thinking: "M68 116 L92 112", sceptical: "M64 116 Q80 108 96 116", confused: "M64 116 Q72 108 80 116 T96 116",
+  intense: "M64 114 L96 114", angry: "M64 120 Q80 106 96 120", sad: "M64 120 Q80 106 96 120", neutral: "M66 115 L94 115",
+};
+function faceArt(n: number, expression: string): string {
+  const hue = (n * 47) % 360;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="200" viewBox="0 0 160 200"><path d="M10 200 Q10 150 80 148 Q150 150 150 200Z" fill="hsl(${hue} 45% 38%)"/><ellipse cx="80" cy="82" rx="46" ry="56" fill="hsl(28 55% 72%)"/><path d="M34 72 Q40 22 80 24 Q122 22 126 72 Q110 44 80 46 Q52 44 34 72Z" fill="hsl(25 35% 22%)"/><circle cx="62" cy="82" r="${expression === "shock" || expression === "surprise" ? 7 : 5}" fill="#1b1b1b"/><circle cx="98" cy="82" r="${expression === "shock" || expression === "surprise" ? 7 : 5}" fill="#1b1b1b"/><path d="${MOUTHS[expression] ?? MOUTHS.neutral}" fill="${expression === "laugh" || expression === "excited" ? "#7a1f2b" : "none"}" stroke="#7a1f2b" stroke-width="4" stroke-linecap="round"/></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+function seedFace(n: number, over: Partial<FaceView> = {}): FaceView {
+  const labels = sampleLabels(n);
+  const art = faceArt(n, labels.expression);
+  const grade = (["4k", "hd", "soft"] as const)[n % 3]!;
+  return {
+    id: (n + 1).toString(16).padStart(8, "0"), addedAt: new Date(Date.now() - n * 3_600_000).toISOString(), filename: `me-${n + 1}.jpg`, stage: "ready", error: "",
+    original: { width: 4000, height: 3000, url: art }, cutout: { state: "done", width: 4000, height: 3000, url: art, thumbUrl: art },
+    labels, labelsEditedByOwner: false, mirrorAllowed: null, quality: { grade, faceHeightPx: [1500, 800, 380][n % 3]!, sharpness: 120 }, starred: n === 0 || n === 4, hidden: false, ...over,
+  };
+}
+const faces: FaceView[] = [
+  ...Array.from({ length: 12 }, (_, n) => seedFace(n)),
+  seedFace(12, { stage: "unclassified", error: "Not classified: expression is missing or outside the vocabulary.", labels: null, quality: null }),
+  seedFace(13, { stage: "classifying", labels: null, quality: null }),
+];
+function faceList(): FaceList {
+  const items = structuredClone(faces);
+  return {
+    items,
+    counts: { total: items.length, ready: items.filter((f) => f.stage === "ready").length, hidden: items.filter((f) => f.hidden).length, working: items.filter((f) => ["queued", "cutting", "classifying"].includes(f.stage)).length, unclassified: items.filter((f) => f.stage === "unclassified").length },
+    model: "claude-haiku-5-5",
+    settings: faceSettings,
+  };
+}
+function finishClassify(f: FaceView, how: "ok" | "fail") {
+  if (how === "fail") {
+    f.stage = f.labels ? "ready" : "unclassified";
+    f.error = f.labels ? "" : "Not classified: Claude gave no labels for this photo.";
+    return;
+  }
+  const n = Number.parseInt(f.id, 16);
+  f.labels = sampleLabels(n);
+  f.quality = { grade: (["4k", "hd", "soft"] as const)[n % 3]!, faceHeightPx: [1500, 800, 380][n % 3]!, sharpness: 100 };
+  f.stage = "ready";
+  f.error = "";
+}
+/** Queued, then cut out (a couple of seconds), then classified. */
+function advanceFace(f: FaceView) {
+  const speed = Number(new URLSearchParams(location.search).get("speed")) || 1;
+  setTimeout(() => {
+    f.stage = "cutting";
+    f.cutout.state = "running";
+  }, 300 / speed);
+  setTimeout(() => {
+    const n = Number.parseInt(f.id, 16);
+    const art = faceArt(n, sampleLabels(n).expression);
+    f.cutout = { state: "done", width: f.original.width, height: f.original.height, url: art, thumbUrl: art };
+    f.original.url = art;
+    f.stage = "classifying";
+  }, 2200 / speed);
+  setTimeout(() => finishClassify(f, "ok"), 4200 / speed);
 }

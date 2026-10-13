@@ -4,6 +4,9 @@ When the video was made in Fabula, the first message may include a **From the vi
 material the film itself provides. Use it before anything else. It exists so that the thumbnail
 shows what the video shows and sounds like the video.
 
+No face frame in the kit, or none that fits? The owner's face pack (`find_faces`, `use_face`, see
+`face-finishing.md`) is the next choice, never a stock photo of a person.
+
 What it can hold (each appears only if there is something to say):
 
 - **Frames** under `assets/kit-f01.jpg ...` (face frames) and `assets/kit-s01.jpg ...` (screen

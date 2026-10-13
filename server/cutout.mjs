@@ -6,6 +6,28 @@ import { isSafeLeaf } from "./paths.mjs";
 
 const MIME = { png: "image/png", jpeg: "image/jpeg", webp: "image/webp" };
 
+/** The local background removal on PNG, JPEG or WebP bytes. Returns {png, width, height}. */
+export async function cutOutBytes(bytes) {
+  const info = imageInfo(bytes);
+  if (!info) throw new Error("Not a PNG, JPEG or WebP image.");
+  // The decoder inside the library allocates width x height x 4 bytes, so refuse oversized images first.
+  if (tooManyPixels(info)) throw new Error(`Over ${MAX_PIXELS / 1_000_000} megapixels.`);
+  // Imported late: it pulls in onnxruntime, which only this call needs.
+  const { removeBackground } = await import("@imgly/background-removal-node");
+  const blob = await removeBackground(new Blob([bytes], { type: MIME[info.type] }), { output: { format: "image/png" } });
+  const png = Buffer.from(await blob.arrayBuffer());
+  const out = imageInfo(png);
+  if (!out) throw new Error("Background removal produced no image.");
+  return { png, width: out.width, height: out.height };
+}
+
+/** Cuts out the image at `source` and writes the PNG to `destination` (the face pack's one call). */
+export async function cutOutFile(source, destination) {
+  const { png, width, height } = await cutOutBytes(await fs.readFile(source));
+  await fs.writeFile(destination, png);
+  return { width, height };
+}
+
 /** Removes the background of assets/<asset> locally and writes assets/<stem>-cutout.png. */
 export async function cutOut(projectDir, asset) {
   if (!isSafeLeaf(asset)) throw new Error("Invalid asset name.");
@@ -18,16 +40,10 @@ export async function cutOut(projectDir, asset) {
   }
   const info = imageInfo(bytes);
   if (!info) throw new Error(`assets/${asset} is not a PNG, JPEG or WebP image.`);
-  // The decoder inside the library allocates width x height x 4 bytes, so refuse oversized images first.
   if (tooManyPixels(info)) throw new Error(`assets/${asset} is over ${MAX_PIXELS / 1_000_000} megapixels.`);
-  // Imported late: it pulls in onnxruntime, which only this call needs.
-  const { removeBackground } = await import("@imgly/background-removal-node");
-  const blob = await removeBackground(new Blob([bytes], { type: MIME[info.type] }), { output: { format: "image/png" } });
-  const png = Buffer.from(await blob.arrayBuffer());
-  const out = imageInfo(png);
-  if (!out) throw new Error("Background removal produced no image.");
+  const { png, width, height } = await cutOutBytes(bytes);
   // Never overwrites: face.jpg and face.png get face-cutout.png and face-cutout-2.png, and a
   // cut-out of face-cutout.png becomes face-cutout-cutout.png.
   const name = await writeUnique(path.join(projectDir, "assets"), `${asset.replace(/\.[^.]+$/, "")}-cutout.png`, png);
-  return { name, width: out.width, height: out.height, from: asset };
+  return { name, width, height, from: asset };
 }

@@ -6,7 +6,9 @@ export interface Size {
 }
 export interface AssetInfo {
   name: string;
-  kind: "upload" | "cutout" | "stock" | "reference" | "kit";
+  kind: "upload" | "cutout" | "stock" | "reference" | "kit" | "face";
+  /** A face copied in from the face pack. */
+  faceId?: string;
   width: number;
   height: number;
   from: string | null;
@@ -297,6 +299,53 @@ export interface CreateSetBody {
 }
 
 /** Everything the screens need from a server; the real client and the mock both implement it. */
+// ---- the face pack ----
+export const EXPRESSIONS = ["smile", "laugh", "surprise", "shock", "excited", "thinking", "sceptical", "confused", "intense", "angry", "sad", "neutral"] as const;
+export const GESTURES = ["none", "point-left", "point-right", "point-camera", "point-up", "hands-up", "facepalm", "thumbs-up", "thumbs-down", "arms-crossed", "hand-on-chin", "holding-object", "other"] as const;
+export const GAZES = ["camera", "left", "right", "up", "down"] as const;
+export const HEAD_TURNS = ["frontal", "three-quarter", "profile"] as const;
+export type FaceStage = "queued" | "cutting" | "classifying" | "ready" | "unclassified" | "failed";
+export interface FaceLabels {
+  expression: (typeof EXPRESSIONS)[number];
+  intensity: 1 | 2 | 3;
+  gesture: (typeof GESTURES)[number];
+  gaze: (typeof GAZES)[number];
+  headTurn: (typeof HEAD_TURNS)[number];
+  eyesOpen: boolean;
+  textOrLogoInShot: boolean;
+  description: string;
+  faceBox?: { x: number; y: number; w: number; h: number };
+}
+export interface FaceView {
+  id: string;
+  addedAt: string;
+  filename: string;
+  stage: FaceStage;
+  /** Why it failed or is unclassified; empty otherwise. */
+  error: string;
+  original: { width: number; height: number; url: string };
+  cutout: { state: string; width: number | null; height: number | null; url: string | null; thumbUrl: string | null };
+  labels: FaceLabels | null;
+  labelsEditedByOwner: boolean;
+  /** null follows the pack setting and the label; true or false is the owner's choice. */
+  mirrorAllowed: boolean | null;
+  quality: { grade: "4k" | "hd" | "soft"; faceHeightPx: number; sharpness: number | null } | null;
+  starred: boolean;
+  hidden: boolean;
+}
+export interface FaceList {
+  items: FaceView[];
+  counts: { total: number; ready: number; hidden: number; working: number; unclassified: number };
+  model: string;
+  settings: { mirrorAll: boolean };
+}
+export interface FacePatch {
+  starred?: boolean;
+  hidden?: boolean;
+  mirrorAllowed?: boolean | null;
+  labels?: Partial<Omit<FaceLabels, "faceBox">>;
+}
+
 export interface Api {
   capabilities(): Promise<Capabilities>;
   presets(): Promise<PresetInfo[]>;
@@ -342,4 +391,13 @@ export interface Api {
   testCompare(id: string, projects?: string[]): Promise<ZipExport>;
   /** Vertical covers per platform; one platform is a JPG, several a zip. */
   platformExport(id: string, platforms?: PlatformId[]): Promise<ZipExport>;
+  listFaces(): Promise<FaceList>;
+  uploadFace(file: File): Promise<FaceView>;
+  patchFace(id: string, patch: FacePatch): Promise<FaceView>;
+  deleteFace(id: string): Promise<void>;
+  restoreFace(id: string): Promise<FaceView>;
+  /** Asks Claude again for these faces (all by default); faces with the owner's labels come back as skipped. */
+  reclassifyFaces(ids?: string[]): Promise<{ changed: string[]; skipped: string[] }>;
+  recutFace(id: string): Promise<FaceView>;
+  setFaceSettings(settings: { mirrorAll: boolean }): Promise<{ mirrorAll: boolean }>;
 }

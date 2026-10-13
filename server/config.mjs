@@ -65,6 +65,11 @@ export function loadConfig(env = process.env, overrides = {}) {
     effort: env.IMAGO_EFFORT?.trim() || "medium",
     furtherModels: parseFurtherModels(env.IMAGO_FURTHER_MODELS?.trim() || DEFAULT_FURTHER_MODELS),
     furtherEffort: env.IMAGO_FURTHER_EFFORT?.trim() || "high",
+    // The face pack's classification turn: a small model at low effort; it only looks and labels.
+    facesModel: env.IMAGO_FACES_MODEL?.trim() || "claude-haiku-5-5",
+    facesEffort: "low",
+    // How long the classifier waits after the last cut-out finished before it takes the batch (ms).
+    facesBatchMs: 2000,
     turnTimeoutMs: num(env.IMAGO_TURN_TIMEOUT_MS, 600_000),
     electronBin: env.IMAGO_ELECTRON_BIN?.trim() || electronFromPackage(),
     // Directory holding the Chromium shared libraries a minimal Linux/WSL image may lack.
@@ -78,6 +83,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     ...overrides,
   };
   config.projectsDir = path.join(config.dataDir, "projects");
+  config.facesDir = path.join(config.dataDir, "faces");
   return config;
 }
 

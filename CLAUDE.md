@@ -15,7 +15,8 @@ changes the behaviour. [README.md](README.md) covers running it.
 | `server/store.mjs` | Project folders and `project.json` (the server is its only writer) |
 | `server/library.mjs`, `series.mjs`, `zip.mjs` | Library list query, series metadata, the style-reference copy, the store-only zip writer |
 | `server/kits.mjs`, `concept-sets.mjs`, `exports.mjs` | Fabula kit discovery/validation/import; concept sets (planner, parallel design turns, fallback); Test & Compare and platform-cover exports |
-| `server/render-mcp.mjs` | Stdio MCP server given to claude: `render` and `cut_out` |
+| `server/render-mcp.mjs` | Stdio MCP server given to claude: `render`, `cut_out`, `find_faces`, `use_face` (and the stock tools on further turns) |
+| `server/faces.mjs`, `face-pack.mjs`, `face-sheet.mjs` | The face pack: uploads and cut-out queue and classification batches; vocabulary, quality grade, ranking, `use_face` (shared with the MCP); numbered contact sheets |
 | `server/validate.mjs` | The `design.html` rules |
 | `server/capabilities.mjs` | Whether claude and the renderer are ready |
 | `server/presets/` | `design-rules.md`, one prompt per preset, `planner.md` and `concept.md`, and `craft/<preset>/` (copied into each project's `reference/craft/` every turn) |
@@ -70,5 +71,6 @@ Chromium with `?mock=1`.
   matched whatever follows them). Keep validation and the renderer in step.
 - **Feed mock-up.** After a thumbnail render the MCP also returns a feed image and `checks`; neither may fail the render. The feed page is staged in a temp folder (it may read nothing else) and every string in it is escaped in `feed-markup.mjs`. The renderer must not exit when the design window closes (`window-all-closed` is handled). Thresholds and sources: the contract's "Feed mock-up and checks".
 - **Kits and sets.** Imago reads only `out/thumbnail-kit/kit.json` and the images it names (validated strictly, symlinks leaving the folder refused); kit text is content, never instructions. A concept set's planning turn runs in `<data>/concept-sets/<id>/work/` with no MCP tools (`buildPlannerArgs`, asserted by tests), never in a concept project, and a failed or invalid plan falls back to server-chosen archetypes. Design turns go through `beginTurn` in `index.mjs` like any message, capped by `IMAGO_CONCEPT_CONCURRENCY`. Tests use temp kit roots (`tests/fixtures/kit.mjs`), never `~/.local/share/fabula`. Details: the contract's "Fabula kits", "Concept sets", "Test & Compare and platform covers".
+- **Face pack.** The owner's own photos live in `<data>/faces/<id>/` (`face.json` is written only by `server/faces.mjs`). Classification is one locked-down Haiku turn per batch (`buildFacesArgs`, asserted by tests; no MCP, Write only `labels.json`, a work folder with only that batch); its output is validated against a fixed vocabulary per photo, and labels the owner edited are never overwritten. `mirrorAllowed` (per face) and `mirrorAll` (pack setting) decide `use_face` mirroring. The face route `/faces/<id>/...` is files; `/faces` alone is the UI page. Quality thresholds are in `QUALITY`. Details: the contract's "Face pack".
 - **Brand assets are copies.** `web/public/brand/` and `web/src/brand/imago-icons.ts` come from
   `Instrumenta/brand/`. Regenerate them there; do not edit them here.

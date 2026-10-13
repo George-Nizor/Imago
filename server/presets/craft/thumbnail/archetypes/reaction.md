@@ -7,6 +7,11 @@ The video is a first look, a test, a surprise, a fail, a verdict, a challenge: s
 to a person. The owner has (or the kit has) a frame with a clear expression: surprise, laugh,
 intense, disbelief.
 
+## Face source
+A frame of the video that shows the reaction wins. With none, the owner's face pack: `find_faces` for the
+expression the idea needs (surprise, shock, laugh, intense) at `minGrade: "hd"` or better, because the face is
+big here. Choose the gaze that points at the text or the thing reacted to; mirror when `mirrorSafe`.
+
 ## Layout
 - 16:9: face 55-75% of the height on one side, bleeding off the bottom and that side. The object or
   scene it reacts to fills the other side at 30-45% of the width, sharp, with a keyline. Text over

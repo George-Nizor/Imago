@@ -4,7 +4,9 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { registerCutout } from "./assets.mjs";
+import { registerCutout, registerFace } from "./assets.mjs";
+import { facesRoot, orderFaces, packSelection, readAllFaces, summarize, usable, readSettings, takeFace } from "./face-pack.mjs";
+import { renderFaceSheet } from "./face-sheet.mjs";
 import { runPlanner } from "./claude-runner.mjs";
 import { fontFamilies } from "./design-files.mjs";
 import { kitPromptSection, writeKitFolder } from "./kits.mjs";
@@ -50,7 +52,7 @@ const wordCount = (text) => text.trim().split(/\s+/).filter(Boolean).length;
  * Checks planner output against the plan's schema. `assets` is the set of file names the concepts may
  * point at (without the `assets/` prefix). Returns {ok, concepts} or {ok: false, reason}.
  */
-export function validateConcepts(raw, { count, assets }) {
+export function validateConcepts(raw, { count, assets, faces = new Set() }) {
   const bad = (reason) => ({ ok: false, reason });
   if (!raw || typeof raw !== "object" || !Array.isArray(raw.concepts)) return bad("concepts.json has no concepts list.");
   if (raw.concepts.length !== count) return bad(`Expected ${count} concepts, found ${raw.concepts.length}.`);
@@ -72,28 +74,50 @@ export function validateConcepts(raw, { count, assets }) {
     if (c.frame !== undefined && c.frame !== null && !picture(c.frame)) return bad(`${at}: frame ${JSON.stringify(String(c.frame).slice(0, 60))} is not an asset.`);
     const pictures = c.pictures === undefined || c.pictures === null ? [] : c.pictures;
     if (!Array.isArray(pictures) || pictures.length > 6 || !pictures.every(picture)) return bad(`${at}: pictures must be existing assets.`);
-    out.push({ archetype: c.archetype, label, idea, text: c.text.replace(/\s+/g, " ").trim(), ...(c.frame ? { frame: c.frame } : {}), ...(pictures.length ? { pictures } : {}), why });
+    if (c.face !== undefined && c.face !== null && !(typeof c.face === "string" && faces.has(c.face))) return bad(`${at}: face ${JSON.stringify(String(c.face).slice(0, 20))} is not in the face pack.`);
+    out.push({ archetype: c.archetype, label, idea, text: c.text.replace(/\s+/g, " ").trim(), ...(c.frame ? { frame: c.frame } : {}), ...(c.face ? { face: c.face } : {}), ...(pictures.length ? { pictures } : {}), why });
   }
   return { ok: true, concepts: out };
+}
+
+/**
+ * Gives concepts that share a pack face different ones where the pack has more to offer. `order` is the
+ * pack's face ids, best first. Mutates and returns `concepts`.
+ */
+export function diversifyFaces(concepts, order) {
+  const used = new Set();
+  for (const c of concepts) {
+    if (!c.face) continue;
+    if (used.has(c.face)) {
+      const other = order.find((id) => !used.has(id) && !concepts.some((x) => x !== c && x.face === id));
+      if (other) c.face = other;
+    }
+    used.add(c.face);
+  }
+  return concepts;
 }
 
 /**
  * Server-chosen concepts for when the planner's file is missing or invalid, and for "another concept":
  * distinct archetypes (never one in `used`), each on a different face frame where the kit has several.
  */
-export function fallbackConcepts({ count, kit = null, records = [], used = [], uploads = [] }) {
+export function fallbackConcepts({ count, kit = null, records = [], used = [], uploads = [], packFaces = [] }) {
   const nameOf = (file) => records.find((r) => r.kitFile === file)?.name;
   const faces = (kit?.frames ?? []).filter((f) => f.kind === "face").sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).map((f) => nameOf(f.file)).filter(Boolean);
   const screens = (kit?.frames ?? []).filter((f) => f.kind === "screen").map((f) => nameOf(f.file)).filter(Boolean);
   const pictures = (kit?.pictures ?? []).map((p) => nameOf(p.file)).filter(Boolean);
   const people = faces.length ? faces : uploads;
-  const order = (people.length ? FACE_ORDER : OBJECT_ORDER).filter((a) => !used.includes(a));
+  // The pack's faces stand in only when the video offers no real frame of a person.
+  const fromPack = !people.length && packFaces.length > 0;
+  const order = (people.length || fromPack ? FACE_ORDER : OBJECT_ORDER).filter((a) => !used.includes(a));
   const rest = THUMBNAIL_ARCHETYPES.filter((a) => !used.includes(a) && !order.includes(a));
   const picks = [...order, ...rest].slice(0, count);
   let turn = used.length; // spreads frames across the whole set, not just this call
   return picks.map((archetype) => {
     const pick = (pool) => (pool.length ? `assets/${pool[turn % pool.length]}` : undefined);
     let frame;
+    let face;
+    const facePick = () => (fromPack ? packFaces[(turn - used.length) % packFaces.length] : undefined);
     let extra = [];
     if (archetype === "object-hero") frame = pick(pictures) ?? pick(screens) ?? pick(people);
     else if (archetype === "before-after" || archetype === "versus") {
@@ -101,6 +125,7 @@ export function fallbackConcepts({ count, kit = null, records = [], used = [], u
       if (pictures.length > 1) extra = [`assets/${pictures[(turn + 1) % pictures.length]}`];
     } else if (archetype === "number") frame = pick(screens) ?? pick(people);
     else frame = pick(people) ?? pick(pictures);
+    if (fromPack && !(archetype === "object-hero" && frame)) face = facePick();
     turn += 1;
     return {
       archetype,
@@ -108,6 +133,7 @@ export function fallbackConcepts({ count, kit = null, records = [], used = [], u
       idea: IDEAS[archetype],
       text: null, // the designer chooses the words
       ...(frame ? { frame } : {}),
+      ...(face ? { face } : {}),
       ...(extra.length ? { pictures: extra } : {}),
       why: "Chosen by Imago for its clarity at feed size; the design keeps to what the video shows.",
     };
@@ -221,6 +247,7 @@ export function createConceptSets(ctx) {
         text: c.text ?? null,
         why: c.why ?? null,
         frame: c.frame ?? null,
+        face: c.face ?? null,
         title: project?.title ?? null,
         current: project?.current ?? 0,
         versionCount: project?.versions?.length ?? 0,
@@ -406,7 +433,8 @@ export function createConceptSets(ctx) {
       const used = set.members.map((m) => m.concept?.archetype ?? m.archetype).filter(Boolean);
       if (set.members.length >= MAX_CONCEPTS || used.length >= MAX_CONCEPTS) throw new SetError("TOO_MANY", `A set holds at most ${MAX_CONCEPTS} concepts, one per archetype.`, 409);
       const kit = await kitOf(set);
-      const [concept] = fallbackConcepts({ count: 1, kit, records: set.kitAssets ?? [], used, uploads: await uploadsOf(set) });
+      const taken = set.members.map((m) => m.concept?.face).filter(Boolean);
+      const [concept] = fallbackConcepts({ count: 1, kit, records: set.kitAssets ?? [], used, uploads: await uploadsOf(set), packFaces: (await packOrder()).filter((f) => !taken.includes(f)).concat(taken) });
       const donor = await donorOf(set);
       const index = Math.max(-1, ...set.members.map((m) => m.index)) + 1;
       const created = await ctx.createProject(
@@ -460,6 +488,31 @@ export function createConceptSets(ctx) {
   };
 
 
+  /** Usable pack face ids, best first. */
+  async function packOrder() {
+    return orderFaces(await readAllFaces(config.dataDir)).map((f) => f.id);
+  }
+
+  /** The planner's view of the pack: a capped sheet, thumbnails and faces.json under work/faces/. Returns the face count shown. */
+  async function stagePack(work) {
+    const all = await readAllFaces(config.dataDir);
+    const chosen = packSelection(all, 24);
+    if (!chosen.length) return 0;
+    const settings = await readSettings(config.dataDir);
+    const dir = path.join(work, "faces");
+    await fs.mkdir(dir, { recursive: true });
+    const items = [];
+    for (const f of chosen) {
+      const thumb = path.join(facesRoot(config.dataDir), f.id, f.cutout.thumb ? "thumb.png" : "cutout.png");
+      await fs.copyFile(thumb, path.join(dir, `${f.id}.png`));
+      items.push({ file: path.join(dir, `${f.id}.png`), label: f.id, caption: `${f.labels.expression} ${f.labels.intensity} · looks ${f.labels.gaze} · ${f.quality?.grade ?? "?"}${f.starred ? " · starred" : ""}` });
+    }
+    const sheet = await renderFaceSheet(config, items, { out: path.join(dir, "sheet.png"), columns: 6, cell: 200, title: `The owner's face pack: ${chosen.length} of ${all.filter(usable).length}` });
+    const summary = { total: all.filter(usable).length, shown: chosen.length, sheet: sheet ? "faces/sheet.png" : null, faces: chosen.map((f, i) => ({ n: i + 1, file: `faces/${f.id}.png`, ...summarize(f, settings) })) };
+    await fs.writeFile(path.join(dir, "faces.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    return chosen.length;
+  }
+
   async function kitOf(set) {
     if (!set.kit) return null;
     for (const m of set.members) {
@@ -499,8 +552,12 @@ export function createConceptSets(ctx) {
     const work = workOf(set.id);
     const kit = await kitOf(set);
     const uploads = (await fs.readdir(path.join(work, "assets")).catch(() => [])).filter((n) => !n.startsWith("kit-"));
+    const packShown = await stagePack(work);
+    const usableIds = new Set((await readAllFaces(config.dataDir)).filter(usable).map((f) => f.id));
+    const packFaces = (await packOrder());
     const text = [
       `Plan ${set.count} different thumbnail concepts for this video and write concepts.json.`,
+      packShown ? `The owner has a face pack of ${usableIds.size} of their own faces: read faces/sheet.png and faces/faces.json, and set "face" on a concept to a pack id when no better real frame exists.` : "",
       uploads.length ? `The owner uploaded ${uploads.map((u) => `assets/${u}`).join(", ")} (face photos or pictures to build on).` : "",
     ].filter(Boolean).join(" ");
     const names = Object.fromEntries((set.kitAssets ?? []).filter((a) => a.kitFile).map((a) => [a.kitFile, a.name]));
@@ -521,7 +578,7 @@ export function createConceptSets(ctx) {
       source: "fallback",
       note,
       cost: outcome.costUsd,
-      concepts: fallbackConcepts({ count: set.count, kit, records: set.kitAssets ?? [], uploads }),
+      concepts: fallbackConcepts({ count: set.count, kit, records: set.kitAssets ?? [], uploads, packFaces }),
     });
     if (!outcome.ok) {
       if (outcome.failure.code === "CANCELLED" || ["CLAUDE_MISSING", "CLAUDE_SIGNED_OUT"].includes(outcome.failure.code)) return { failure: outcome.failure, cost: outcome.costUsd };
@@ -533,9 +590,9 @@ export function createConceptSets(ctx) {
     } catch {
       return fallback("The planner wrote no readable concepts.json, so Imago chose the concepts.");
     }
-    const checked = validateConcepts(parsed, { count: set.count, assets });
+    const checked = validateConcepts(parsed, { count: set.count, assets, faces: usableIds });
     if (!checked.ok) return fallback(`The planner's concepts were not usable (${checked.reason}), so Imago chose the concepts.`);
-    return { source: "planner", note: "", cost: outcome.costUsd, concepts: checked.concepts };
+    return { source: "planner", note: "", cost: outcome.costUsd, concepts: diversifyFaces(checked.concepts, packFaces) };
   }
 
   /** One cut_out per chosen face frame (or upload); the result is copied to the projects that use it. */
@@ -570,12 +627,27 @@ export function createConceptSets(ctx) {
     return made;
   }
 
+  /** Copies the concept's pack face into its project, registered as a face, before its design turn. */
+  async function placeFace(member) {
+    const face = member.concept?.face;
+    if (!face) return null;
+    try {
+      const made = await takeFace(config.dataDir, store.dirOf(member.projectId), face);
+      await registerFace(store, member.projectId, { name: made.name, width: made.width, height: made.height, faceId: face });
+      return made.name;
+    } catch {
+      return null; // the designer can still find_faces and use_face itself
+    }
+  }
+
   async function designMember(id, set, member, siblings, ctl, cutout) {
     if (!member) return;
     const concept = member.concept;
+    const faceName = await placeFace(member);
     const text = [
       `Make concept ${member.index + 1} of ${set.members.length}: "${concept.label}" (${concept.archetype}). Your instructions describe it; execute it.`,
       cutout ? `A cut-out of its main picture is ready: assets/${cutout} (background already removed).` : "",
+      faceName ? `Its face is assets/${faceName}, from the owner's face pack (already cut out; use_face with mirror gives the other-facing copy when allowed). Respect its quality grade and match its gaze to the text side.` : "",
     ].filter(Boolean).join(" ");
     const setMember = (patch) => mutate(id, (s) => void Object.assign(s.members.find((m) => m.index === member.index) ?? {}, patch));
     await limit(async () => {
@@ -637,7 +709,7 @@ export function createConceptSets(ctx) {
   /** The planner's folder holds copies of the kit; once the plan is made only concepts.json is worth keeping. */
   async function finishPlanning(id) {
     const work = workOf(id);
-    for (const sub of ["assets", "reference"]) await fs.rm(path.join(work, sub), { recursive: true, force: true }).catch(() => {});
+    for (const sub of ["assets", "reference", "faces"]) await fs.rm(path.join(work, sub), { recursive: true, force: true }).catch(() => {});
   }
 
   return api;

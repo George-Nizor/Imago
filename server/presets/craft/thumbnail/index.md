@@ -6,7 +6,7 @@ what the job needs. Always read the first two. Then read the file for your forma
 | File | Read it when |
 | --- | --- |
 | `honesty-and-title.md` | Always. What may appear on the image, and how the image and the title share the work |
-| `face-finishing.md` | The image has a person or a cut-out subject |
+| `face-finishing.md` | The image has a person or a cut-out subject; also how to use the owner's face pack (`find_faces`, `use_face`, grades, mirroring) |
 | `archetypes/<id>.md` | Always one: your archetype. Ids: `reaction`, `result-reveal`, `before-after`, `versus`, `number`, `curiosity-gap`, `object-hero`, `story-moment` |
 | `vertical.md` | The format is Shorts 9:16 (YouTube Shorts, Instagram Reels, TikTok) |
 | `square.md` | The format is podcast 1:1 |

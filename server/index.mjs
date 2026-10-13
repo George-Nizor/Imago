@@ -15,9 +15,11 @@ import { ExportError, JPEG_BUDGET, PLATFORM_EXPORTS, asciiSlug, renderJpg, write
 import { KitError, discoverKits, findKit, importKitInto, kitFilePath, kitSummary, suggestedBrief } from "./kits.mjs";
 import { validateDesignFile } from "./design-files.mjs";
 import { PathError, isProjectId, isSafeLeaf } from "./paths.mjs";
+import { isFaceId } from "./face-pack.mjs";
 import { EXPORT_SCALES, MAX_EXPORT_EDGE, MAX_SIDE, MIN_SIDE, PHOTO_ASPECTS, PLATFORMS, PRESETS, THUMBNAIL_FORMATS, allowedScales, briefPlatforms, presetById, thumbnailFormat } from "./presets/index.mjs";
 import { RenderError, renderHtml } from "./renderer.mjs";
 import { StoreError, createStore } from "./store.mjs";
+import { FaceError, createFaces } from "./faces.mjs";
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -175,7 +177,9 @@ export function createServer(config = loadConfig(), deps = {}) {
     return { done };
   }
 
+  const faces = createFaces({ config, cutOutFile: deps.cutOutFile });
   const sets = createConceptSets({
+    faces,
     config,
     store,
     createProject: (body, opts) => createProject(body, opts),
@@ -476,6 +480,40 @@ export function createServer(config = loadConfig(), deps = {}) {
     return { name: zipName, url: `/concept-sets/${id}/exports/${zipName}`, bytes, files };
   }
 
+  async function facesApi(req, res, b, c) {
+    const method = req.method;
+    if (!b) {
+      if (method === "GET") return sendJson(res, 200, await faces.list());
+      if (method === "POST") {
+        const { filename, bytes } = await uploadBytes(req);
+        return sendJson(res, 201, await faces.add(filename, bytes));
+      }
+      throw new HttpError(405, "METHOD", "Method not allowed.");
+    }
+    if (b === "settings") {
+      if (method === "GET") return sendJson(res, 200, await faces.settings());
+      if (method === "PUT") return sendJson(res, 200, await faces.setSettings(await readJson(req)));
+      throw new HttpError(405, "METHOD", "Method not allowed.");
+    }
+    if (b === "reclassify") {
+      if (method !== "POST") throw new HttpError(405, "METHOD", "Method not allowed.");
+      const body = await readJson(req);
+      if (body.ids !== undefined && !(Array.isArray(body.ids) && body.ids.length <= 500 && body.ids.every(isFaceId))) throw new HttpError(400, "BAD_IDS", "ids must be a list of face ids.");
+      return sendJson(res, 200, await faces.reclassify(body.ids));
+    }
+    if (!isFaceId(b)) throw new HttpError(400, "BAD_ID", "Invalid face id.");
+    if (!c) {
+      if (method === "GET") return sendJson(res, 200, await faces.get(b));
+      if (method === "PATCH") return sendJson(res, 200, await faces.patch(b, await readJson(req)));
+      if (method === "DELETE") return sendJson(res, 200, await faces.trash(b));
+      throw new HttpError(405, "METHOD", "Method not allowed.");
+    }
+    if (method !== "POST") throw new HttpError(405, "METHOD", "Method not allowed.");
+    if (c === "restore") return sendJson(res, 200, await faces.restore(b));
+    if (c === "recut") return sendJson(res, 202, await faces.recut(b));
+    throw new HttpError(404, "NOT_FOUND", "Unknown API route.");
+  }
+
   async function conceptApi(req, res, b, c) {
     const method = req.method;
     if (!b) {
@@ -560,6 +598,7 @@ export function createServer(config = loadConfig(), deps = {}) {
       return sendJson(res, 200, { items: found.map(kitSummary), rejected });
     }
     if (a === "concept-sets") return conceptApi(req, res, b, c);
+    if (a === "faces") return facesApi(req, res, b, c);
     if (a !== "projects") throw new HttpError(404, "NOT_FOUND", "Unknown API route.");
 
     if (!b) {
@@ -775,6 +814,16 @@ export function createServer(config = loadConfig(), deps = {}) {
     return sendFile(res, real, { "content-security-policy": FILE_CSP });
   }
 
+  /** The face pack's images: the original, the cut-out and its thumbnail, as images only. */
+  async function faceFiles(res, segs) {
+    // ["", "faces", id, file]
+    const [, , id, leaf, extra] = segs;
+    if (!id || !leaf || extra || !isSafeLeaf(leaf) || !IMAGE_EXTENSIONS.has(path.extname(leaf).toLowerCase())) throw new HttpError(404, "NOT_FOUND", "Not found.");
+    const file = await faces.servable(id, leaf);
+    if (!file) throw new HttpError(404, "NOT_FOUND", "Not found.");
+    return sendFile(res, file, { "content-security-policy": FILE_CSP });
+  }
+
   /** A set's finished export zip. */
   async function setExports(res, segs) {
     // ["", "concept-sets", id, "exports", file]
@@ -826,6 +875,8 @@ export function createServer(config = loadConfig(), deps = {}) {
       if (req.method !== "GET" && req.method !== "HEAD") throw new HttpError(405, "METHOD", "Method not allowed.");
       if (segs[1] === "projects") return await projectFiles(res, segs, (id) => `/projects/${id}/`);
       if (segs[1] === "kits") return await kitFiles(res, segs);
+      // /faces alone is the UI page; only /faces/<id>/... is a file.
+      if (segs[1] === "faces" && segs[2]) return await faceFiles(res, segs);
       if (segs[1] === "concept-sets") return await setExports(res, segs);
       if (segs[1] === "fonts" && segs[2] && !segs[3]) {
         if (!isSafeLeaf(segs[2])) throw new PathError("unsafe file name");
@@ -834,7 +885,7 @@ export function createServer(config = loadConfig(), deps = {}) {
       }
       return await webFiles(res, url.pathname);
     } catch (error) {
-      const known = error instanceof HttpError || error instanceof StoreError || error instanceof UploadError || error instanceof SeriesError || error instanceof StyleReferenceError || error instanceof KitError || error instanceof SetError || error instanceof ExportError;
+      const known = error instanceof HttpError || error instanceof StoreError || error instanceof UploadError || error instanceof SeriesError || error instanceof StyleReferenceError || error instanceof KitError || error instanceof SetError || error instanceof FaceError || error instanceof ExportError;
       const status = known ? error.status : error instanceof PathError ? 400 : 500;
       const code = known ? error.code : error instanceof PathError ? "BAD_PATH" : "INTERNAL";
       if (res.headersSent) return res.end();
@@ -847,11 +898,13 @@ export function createServer(config = loadConfig(), deps = {}) {
     server,
     store,
     sets,
+    faces,
     config,
     capabilities,
     async listen(port = config.port, host = config.host) {
       await store.clearStaleRunning();
       await sets.recover();
+      await faces.recover();
       await store.purgeTrash().catch(() => {});
       await new Promise((resolve, reject) => {
         server.once("error", reject);
@@ -862,6 +915,7 @@ export function createServer(config = loadConfig(), deps = {}) {
     async close() {
       clearInterval(heartbeat);
       sets.abortAll();
+      faces.close();
       for (const { controller } of turns.values()) controller.abort();
       for (const set of subscribers.values()) for (const res of set) res.end();
       server.closeAllConnections?.();

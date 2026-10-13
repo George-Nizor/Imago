@@ -52,6 +52,10 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
   useEffect(() => {
     if (preset === "thumbnail") api.listKits().then((l) => setKits(l.items)).catch(() => {});
   }, [preset]);
+  const [packFaces, setPackFaces] = useState(0);
+  useEffect(() => {
+    if (preset === "thumbnail") api.listFaces().then((l) => setPackFaces(l.items.filter((f) => f.stage === "ready" && !f.hidden).length)).catch(() => {});
+  }, [preset]);
   const kit = kits.find((k) => k.id === kitId);
   const [fromKit, setFromKit] = useState(false);
   function pickKit(k: KitSummary | undefined) {
@@ -231,6 +235,12 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
         <fieldset disabled={busy} className="fields">
           {preset === "thumbnail" && (
             <>
+              {packFaces > 0 && (
+                <p className="face-pack-note">
+                  Your face pack: {packFaces} {packFaces === 1 ? "face" : "faces"}, Claude picks.{" "}
+                  <a href="/faces" onClick={(e) => { e.preventDefault(); navigate("/faces"); }}>Manage faces</a>
+                </p>
+              )}
               {!styled && kits.length > 0 && (
                 <div className="field">
                   <span className="label">Start from</span>

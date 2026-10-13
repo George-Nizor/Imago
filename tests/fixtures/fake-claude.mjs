@@ -71,6 +71,32 @@ if (fetchedStock) {
 const mcp = JSON.parse(flag("--mcp-config").trim().startsWith("{") ? flag("--mcp-config") : fs.readFileSync(flag("--mcp-config"), "utf8")).mcpServers.imago;
 const trace = (event) => process.env.FAKE_CLAUDE_TRACE && fs.appendFileSync(process.env.FAKE_CLAUDE_TRACE, `${JSON.stringify({ event, t: Date.now(), cwd: process.cwd() })}\n`);
 
+if (!mcp && /You label photos/.test(systemPrompt ?? "")) {
+  // The face classifier: labels every image in images/. FAKE_CLAUDE_FACES = invalid (photo 2 has a bad expression) | partial (only photo 1) | missing | badjson.
+  const kind = process.env.FAKE_CLAUDE_FACES ?? "";
+  const expressions = ["smile", "shock", "thinking", "angry", "laugh", "neutral"];
+  const gazes = ["camera", "left", "right", "up"];
+  const names = fs.existsSync("images") ? fs.readdirSync("images").sort() : [];
+  const faces = names.map((_, i) => ({
+    n: i + 1,
+    expression: expressions[i % expressions.length],
+    intensity: (i % 3) + 1,
+    gesture: i % 2 ? "point-left" : "none",
+    gaze: gazes[i % gazes.length],
+    eyesOpen: true,
+    headTurn: "frontal",
+    faceBox: { x: 0.25, y: 0.1, w: 0.4, h: 0.6 },
+    textOrLogoInShot: i === 2,
+    description: `Fake photo ${i + 1}`,
+  }));
+  if (kind === "invalid" && faces[1]) faces[1].expression = "ecstatic";
+  const body = kind === "partial" ? faces.slice(0, 1) : faces;
+  if (kind === "badjson") fs.writeFileSync("labels.json", "{nope");
+  else if (kind !== "missing") fs.writeFileSync("labels.json", JSON.stringify({ faces: body }));
+  send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Labelled." }] }, session_id: sessionId });
+  send({ type: "result", subtype: "success", is_error: false, result: "Labelled.", session_id: sessionId, total_cost_usd: 0.002, duration_ms: 20 });
+  process.exit(0);
+}
 if (!mcp) {
   // The planner: reads nothing, writes concepts.json in its folder.
   const count = Number(/You plan (\d+) different/.exec(systemPrompt ?? "")?.[1] ?? 3);
@@ -86,6 +112,15 @@ if (!mcp) {
     ...(faces.length ? { frame: `assets/${faces[i % faces.length]}` } : {}),
     why: `Reason ${i + 1}.`,
   }));
+  // A face pack in the planning folder: pick its faces in turn (FAKE_CLAUDE_PLANNER=badface names one that is not there).
+  if (fs.existsSync("faces/faces.json")) {
+    const pack = JSON.parse(fs.readFileSync("faces/faces.json", "utf8")).faces;
+    concepts.forEach((c, i) => {
+      delete c.frame;
+      c.face = process.env.FAKE_CLAUDE_FACE_SAME ? pack[0].id : pack[i % pack.length].id;
+    });
+    if (kind === "badface") concepts[0].face = "deadbeef";
+  }
   if (kind === "invalid") concepts[0].archetype = "not-an-archetype";
   if (kind !== "missing") fs.writeFileSync("concepts.json", JSON.stringify({ concepts }));
   send({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_p", name: "Write", input: { file_path: `${process.cwd()}/concepts.json`, content: "..." } }] }, session_id: sessionId });

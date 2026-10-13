@@ -140,5 +140,20 @@ export const realApi: Api = {
     return () => es.close();
   },
   testCompare: (id, projects) => call(`/api/concept-sets/${enc(id)}/test-compare`, json("POST", projects ? { projects } : {})),
+  listFaces: () => call("/api/faces"),
+  uploadFace: (file) =>
+    call("/api/faces", {
+      method: "POST",
+      headers: { "x-filename": filenameHeader(file.name), "content-type": file.type || "application/octet-stream" },
+      body: file,
+    }),
+  patchFace: (id, patch) => call(`/api/faces/${enc(id)}`, json("PATCH", patch)),
+  deleteFace: async (id) => {
+    await call(`/api/faces/${enc(id)}`, { method: "DELETE" });
+  },
+  restoreFace: (id) => call(`/api/faces/${enc(id)}/restore`, json("POST", {})),
+  reclassifyFaces: (ids) => call("/api/faces/reclassify", json("POST", ids ? { ids } : {})),
+  recutFace: (id) => call(`/api/faces/${enc(id)}/recut`, json("POST", {})),
+  setFaceSettings: (settings) => call("/api/faces/settings", json("PUT", settings)),
   platformExport: (id, platforms) => call(`/api/projects/${enc(id)}/platform-export`, json("POST", platforms ? { platforms } : {})),
 };

@@ -28,6 +28,9 @@ Imago/
 │   ├── zip.mjs         a store-only zip writer for the library's Export
 │   ├── kits.mjs        Fabula thumbnail kits: discovery, strict validation, import, contact sheet, the "From the video" prompt section
 │   ├── concept-sets.mjs   concept sets: planner, parallel design turns, fallback, cancel, another concept
+│   ├── faces.mjs       the face pack: uploads, cut-out queue, classification batches (face.json is written only here)
+│   ├── face-pack.mjs   the pack's vocabulary, label validation, quality grade, ranking, use_face; read by the server and the render MCP
+│   ├── face-sheet.mjs  numbered contact sheets of face images (classifier batch, planner pack sheet, find_faces)
 │   ├── exports.mjs     Test & Compare and per-platform JPG exports under a size budget
 │   └── presets/        design-rules.md, thumbnail.md, photo.md, graphic.md, series.md, further.md, planner.md, concept.md, craft/<preset>/
 ├── render/render.cjs   headless Electron: design.html -> png|jpg|webp, plus measurements and the feed capture
@@ -45,9 +48,10 @@ Scripts: `npm start` (server), `npm run dev` (server and Vite together, Vite pro
 - `PORT` comes from the environment (default `49321`). The server always binds `127.0.0.1`; there is
   no `HOST` setting. Never listen on anything but loopback.
 - `IMAGO_WEB_ROOT` is the built UI, `web/dist` by default, resolved against the package root.
-- `IMAGO_DATA_DIR` holds the projects (`projects/`), `series.json`, the concept sets (`concept-sets/`) and the trash (`projects/.trash/`), `~/.local/share/imago` by default.
+- `IMAGO_DATA_DIR` holds the projects (`projects/`), `series.json`, the concept sets (`concept-sets/`), the face pack (`faces/`) and the trash (`projects/.trash/`), `~/.local/share/imago` by default.
 - `IMAGO_CLAUDE_BIN` is `claude` by default. Tests point it at `tests/fixtures/fake-claude.mjs`.
 - `IMAGO_MODEL` defaults to `claude-sonnet-5-5`. `IMAGO_EFFORT` defaults to `medium`.
+- `IMAGO_FACES_MODEL` defaults to `claude-haiku-5-5`: the model of the face pack's classification turn (always `--effort low`).
 - `IMAGO_FURTHER_MODELS` defaults to `opus=claude-opus-5-5,fable=claude-fable-5-1`: the models a
   "Take it further" turn can use. `IMAGO_FURTHER_EFFORT` defaults to `high`.
 - `IMAGO_TURN_TIMEOUT_MS` defaults to 600000.
@@ -87,7 +91,7 @@ exports/                files made by Export (JPGs, and the zips of platform cov
   "sessionId": null,
   "briefSent": false,
   "brief": { "free-form fields from the start form": "" },
-  "assets": [{ "name": "face.png", "kind": "upload|cutout|stock|reference|kit", "width": 0, "height": 0, "from": null }],
+  "assets": [{ "name": "face.png", "kind": "upload|cutout|stock|reference|kit|face", "width": 0, "height": 0, "from": null }],
   "messages": [{ "role": "user|assistant", "text": "", "at": "ISO", "version": null, "mode": "standard|further", "model": "claude-..." }],
   "versions": [{ "n": 1, "at": "ISO", "warnings": [], "checks": [{ "id": "text.words", "level": "ok", "value": 3, "message": "3 words." }] }],
   "current": 1,
@@ -98,6 +102,8 @@ exports/                files made by Export (JPGs, and the zips of platform cov
   "kit": { "id": "…", "title": "…", "project": "…", "createdAt": "ISO", "contactSheet": true }
 }
 ```
+
+An asset of kind `face` is a pack face copied in (`face-<id>.png` or `face-<id>-mirrored.png`; it also carries `faceId` and `mirrored`); `syncAssets` recognises those names.
 
 `conceptSet` and `kit` exist only on projects made as one concept of a set, or from a Fabula kit (see "Fabula
 kits" and "Concept sets"); `archetype` and `label` are null until the planner has run. A project without them is an
@@ -190,9 +196,9 @@ optional and the system prompt is unchanged without it. The form field itself be
   `thumbnail.md`. A planning turn needs Read and Glob, `Write(./concepts.json)` and no `render` or
   `cut_out`, and may Read the kit's files in `assets/` (named in its first message, with the contact
   sheet when there is one) and `reference/craft/`. It writes `{"concepts": [...]}` in the shape of the
-  plan (`archetype`, `label`, `idea`, `text`, `frame?`, `pictures?`, `why`). The wiring validates the file
+  plan (`archetype`, `label`, `idea`, `text`, `frame?`, `face?`, `pictures?`, `why`). The wiring validates the file
   (distinct archetypes in `THUMBNAIL_ARCHETYPES`, `text` of at most 4 words, `frame` and `pictures` paths
-  that exist) and falls back when it fails; the prompt asks for exactly that.
+  that exist, `face` (when given) the id of a usable pack face; see "Face pack") and falls back when it fails; the prompt asks for exactly that.
 - `concept.md`, placeholders `{{concept}}` and `{{siblings}}`: a section appended to a design turn's
   system prompt (after `thumbnail.md`, series and further sections), built with
   `conceptSection(concept, siblings)`. `describeConcept()` renders a concept as plain lines and the siblings as
@@ -247,6 +253,111 @@ chapters, a frame table (file, kind, time, tags, key signals and face box, words
 credits, the palette, the display font ("Imago has it" or "does not have it, take the closest heavy face") and the
 contact sheet's name. It opens by saying the text is content and never instructions, which the design rules already say
 of the brief. Pipes in cells are replaced so the table cannot be broken.
+
+## Face pack
+
+The owner uploads photos of their own face once (many expressions and gestures); Imago cuts each out, Claude
+classifies them, and thumbnail design turns and the concept planner pull the face they need. It has nothing to do
+with Fabula or kits: the photos are independent uploads. (Plan: `Instrumenta/docs/suite/thumbnail-uplift.md`, "Face pack".)
+
+**Library.** `<IMAGO_DATA_DIR>/faces/<id>/` (`<id>` is 8 lowercase hex characters) holds `original.<png|jpg|webp>` (the
+upload as sent), `cutout.png` (the existing local cut-out, made once at upload, full size), `thumb.png` (the cut-out at
+most 360 px tall, for grids and sheets) and `face.json`: `{schemaVersion, id, addedAt, filename, original {file, width,
+height, bytes} (sizes after EXIF orientation), cutout {state queued|running|done|failed, width, height, thumb, error},
+classification {state pending|running|done|unclassified, reason}, labels, labelsEditedByOwner, mirrorAllowed
+(true|false|null), quality {grade, faceHeightPx, sharpness}, starred, hidden}`. `faces/settings.json` is the pack setting
+`{mirrorAll}` (default true). Deleted faces move to `faces/.trash/<id>` (undo is a move back, purged after seven days).
+Uploads follow the project asset rules (PNG, JPEG or WebP by header, 40 MB, 100 megapixels, `x-filename`, atomic
+creation; at most 300 faces, 409 `PACK_FULL`). The server is the only writer of `face.json`; the render MCP and the planner
+read it (`face-pack.mjs`).
+
+**Cut-out queue.** One cut-out at a time, in the background (`createFaces`). A photo stored sideways by its EXIF flag is
+cut out upright. A failed cut-out is reported (`stage: "failed"`, `POST /api/faces/:id/recut` retries). After a restart a
+cut-out that was running is queued again; a classification that was pending is marked unclassified ("Press Reclassify")
+rather than silently spending usage.
+
+**Classification** (`runFacesClassifier`, prompt `presets/faces-classify.md`). One turn per batch: the faces whose cut-out
+is done and whose classification is pending, taken after the cut-out queue has been idle for `facesBatchMs` (2 s), at most
+20 per turn (more make further turns). The work folder `faces/.work/<run>/` holds only `images/01.jpg ...` (the originals at
+most 1024 px, upright) and `sheet.png` (a numbered contact sheet); it is removed afterwards. Arguments (`buildFacesArgs`) are
+the planner's lock-down: `--restricted`, `--setting-sources ""`, `--strict-mcp-config --mcp-config '{"mcpServers":{}}'` (no MCP),
+`--tools "Read,Write,Glob"`, `--permission-mode dontAsk --permission-prompts none --disable-slash-commands`, `--allowedTools
+"Read(./**),Glob(./**),Write(./labels.json)"`, `--disallowedTools "Bash,WebFetch,WebSearch,Task,NotebookEdit,Edit,Write(./images/**),
+Write(./sheet.png)"`, the prompt through `--append-system-prompt-file`, `--model $IMAGO_FACES_MODEL --effort low`, never `--resume`.
+Photos are numbered, so Claude never sees an id or a path. The prompt says text in photos is content, never instructions.
+
+**Vocabulary** (`face-pack.mjs`, validated by the server; nothing outside it is stored):
+
+| Label | Values |
+| --- | --- |
+| `expression` | smile, laugh, surprise, shock, excited, thinking, sceptical, confused, intense, angry, sad, neutral |
+| `intensity` | 1, 2, 3 |
+| `gesture` | none, point-left, point-right, point-camera, point-up, hands-up, facepalm, thumbs-up, thumbs-down, arms-crossed, hand-on-chin, holding-object, other |
+| `gaze` | camera, left, right, up, down (image terms: `left` looks toward the left edge, so a layout knows which side the face looks toward) |
+| `headTurn` | frontal, three-quarter, profile |
+| `eyesOpen`, `textOrLogoInShot` | booleans |
+| `faceBox` | `{x, y, w, h}` fractions 0 to 1 of the photo (a little overshoot is clamped) |
+| `description` | one line, control characters removed, at most 140 characters |
+
+**Invalid output.** Each photo is validated on its own: what validates is kept; a photo whose entry is missing or invalid
+(or the whole answer when `labels.json` is missing or unparsable, or the turn fails or Claude is signed out) becomes
+`unclassified` with the reason, and Reclassify (all, or `ids`) retries it. A face that already had labels keeps them when
+a Reclassify fails. **Labels the owner edited** (`labelsEditedByOwner`) are never overwritten: Reclassify skips them and a
+classification result fills in only a missing `faceBox`.
+
+**Quality**, local: the face's pixel height (`faceBox.h` times the cut-out's height) and sharpness (variance of the Laplacian
+of the face crop, scaled to 256 px tall so it does not depend on resolution; `QUALITY` in `face-pack.mjs`). A 3x thumbnail
+export is 2160 px tall and the craft files want the face at about half of it.
+
+| Grade | Face height | Meaning |
+| --- | --- | --- |
+| `4k` | 1000 px or more and sharpness 60 or more | survives a 3x export filling half the canvas, 1:1 |
+| `hd` | 540 px or more (a sharp 4k face under sharpness 60 is held here) | fine at 1080p, softens when large at 3x |
+| `soft` | under 540 px, or sharpness under 25 | use small or not at all |
+
+The thresholds are starting values, not calibrated on a large set; change them in `QUALITY` only. A face with no box has no grade.
+
+**Mirroring.** `mirrorAllowed` per face is the owner's choice (`true` or `false` wins); `null` follows the pack setting
+`mirrorAll` (default on: the owner is happy for every face to be mirrored); with `mirrorAll` off a face may be mirrored only
+when Claude saw no text or logo in the shot (`textOrLogoInShot` stays Claude's label). `use_face` with `mirror` is refused only
+when the effective value is false (`mirrorAllowedFor`).
+
+**Tools** (render MCP; the MCP reads `<IMAGO_DATA_DIR>/faces/` directly):
+
+- `find_faces({expression?, gesture?, gaze?, minGrade?, count?})` returns the best matches (`count` 4 by default, at most 8): usable
+  faces only (cut out, classified, not hidden), ordered starred first, then grade, then 0.6 sharpness (capped at 200) plus 0.4
+  recency. The result is a contact sheet image (numbered, with id, expression, gaze, grade) and JSON `{faces: [{n, id, expression,
+  intensity, gesture, gaze, headTurn, eyesOpen, textOrLogoInShot, mirrorSafe (the effective mirroring), grade, faceHeightPx, width,
+  height, starred, description}], packHas: {expression: count}, note?}`. The sheet is a help; without a renderer there is none.
+- `use_face({id, mirror?})` copies the cut-out to `assets/face-<id>.png`, or with `mirror` writes `assets/face-<id>-mirrored.png`
+  with the pixels flipped (sharp), and returns `{name, id, mirrored, width, height, grade, faceHeightPx}`. It refuses a hidden or not
+  ready face and a mirror that is not allowed. The server then syncs assets (kind `face`).
+
+**Planner and concept sets.** When the pack has usable faces, the planning folder gets `faces/sheet.png` (starred first, then
+the best of each expression, at most 24, numbered), `faces/faces.json` (the same faces with their labels, grade and `mirrorSafe`,
+and the pack's total) and `faces/<id>.png` thumbnails; the first message says so. `concepts.json` may carry `face` (a pack
+id; unknown or unusable ids make the plan invalid, which falls back). Concepts that name the same face get different ones where the
+pack has more (`diversifyFaces`). The fallback uses pack faces, different per concept, only when the video and uploads offer no
+real frame of a person. Before a concept's design turn its face's cut-out is copied into its project as `face-<id>.png` (kind
+`face`) and named in the first message; concept prompts say the face may be mirrored (when allowed), must match its gaze to the
+text side and respect its grade. Honesty: a reused face is fine, but it may not stand in for a moment or result the video does
+not have (planner.md, thumbnail.md and `face-finishing.md` say so).
+
+**API.** `GET /api/faces` `{items: [face view], counts {total, ready, hidden, working, unclassified}, model, settings {mirrorAll}, lastRun}`
+(the UI polls it every second while anything is in progress); a face view is `{id, addedAt, filename, stage queued|cutting|classifying|ready|unclassified|failed,
+error, original {width, height, url}, cutout {state, width, height, url, thumbUrl}, labels, labelsEditedByOwner, mirrorAllowed, quality,
+starred, hidden, classification}`. `POST /api/faces` (raw image, `x-filename`) 201 face view. `PATCH /api/faces/:id`
+`{starred?, hidden?, mirrorAllowed?, labels?}` (labels are partial edits against the vocabulary, 400 `BAD_LABELS`; an edit marks them as the owner's;
+400 `INCOMPLETE_LABELS` when a face with no labels is given too few). `DELETE /api/faces/:id` (to the trash), `POST /api/faces/:id/restore`,
+`POST /api/faces/:id/recut` (409 `NOT_FAILED`), `POST /api/faces/reclassify {ids?}` `{changed, skipped}`, `GET|PUT /api/faces/settings`
+`{mirrorAll}`. Files: `/faces/<id>/original.<ext>`, `cutout.png`, `thumb.png` only, `Cache-Control: no-store`, `nosniff`, `Content-Security-Policy:
+sandbox; default-src 'none'`; 404 for anything else (`face.json` included).
+
+**UI.** The **Faces** page (`/faces`, nav link): multi-upload (drop, choose, paste) with an upload bar and per-photo stage on each tile (waiting,
+cutting out, labelling), the pack-wide mirroring checkbox ("Mirroring: allowed for all faces unless I say otherwise"), filters by expression, gesture and
+gaze plus starred and show hidden, a grid of cut-outs on a checker ground with the quality badge, star, hide and delete (with a six-second Undo), an edit dialog
+(labels, per-face mirroring, retry for failed or unclassified), Reclassify, and an empty state saying what to upload. The thumbnail start form shows "Your face pack: N faces,
+Claude picks." when the pack has ready faces.
 
 ## Concept sets
 
@@ -415,6 +526,7 @@ claude -p --output-format stream-json --verbose
   mock-up is also saved as `renders/v<n>-feed.png`. The mock-up and the checks never fail a render:
   if either breaks, the design image and `{version, warnings}` still come back.
   On validation errors it returns `isError: true` with the list.
+- `find_faces({expression?, gesture?, gaze?, minGrade?, count?})` and `use_face({id, mirror?})`: the owner's face pack, see "Face pack". Allowed in standard and further turns.
 - `cut_out({asset})`: removes the background of `assets/<asset>` and writes
   `assets/<stem>-cutout.png` (never overwriting: `-2`, `-3` ... when the name is taken, so `face.jpg`
   and `face.png` do not collide). It returns `{name, width, height, from}`; the server registers it
@@ -460,6 +572,7 @@ status.
 | `POST /api/projects/:id/restore` | `{version}` | `project` (copies `versions/v<n>.html` to `design.html`, sets `current`); 404 when the version or its file is missing; 409 while a turn runs |
 | `POST /api/projects/:id/export` | `{format: "png"\|"jpg"\|"webp", scale: 1\|1.5\|2\|3 (longest output edge at most 8192)}` | `{name, url, width, height, bytes}` |
 | `POST /api/projects/:id/platform-export` | `{platforms?: ["youtube-shorts"\|"instagram-reels"\|"tiktok"]}` (default: the brief's platforms, else all three) | `{name, url, bytes, files: [{platform, name, width, height, bytes, quality, overBudget}]}`: one platform is a JPG, several a zip; 400 `NOT_SHORTS`, 409 `NO_RENDERS`, `TURN_RUNNING`; see Platform covers |
+| `GET /api/faces`, `POST /api/faces`, `PATCH|DELETE /api/faces/:id`, `POST /api/faces/:id/restore`, `POST /api/faces/:id/recut`, `POST /api/faces/reclassify`, `GET|PUT /api/faces/settings` | | the face pack; see "Face pack" |
 | `GET /api/kits` | | `{items: [kit summary], rejected: [{name, reason}]}`; see Fabula kits |
 | `POST /api/concept-sets` | `{title?, brief, kit?, count?: 2-4 (default 3)}` | 201 set view (state `draft`) and its N projects; 400 `BAD_COUNT`, `NEEDS_TITLE` |
 | `POST /api/concept-sets/:id/assets` | raw image, `x-filename`, as for projects | `{name, width, height}`: the photo goes into every concept project and the planner's folder; only while `draft` (409 `NOT_DRAFT`) |
@@ -507,6 +620,7 @@ The server also serves these files, with `Cache-Control: no-store` and `X-Conten
   with `Content-Security-Policy: sandbox; default-src 'none'`. Only those extensions are registered
   into `project.assets`.
 - `/projects/:id/exports/*.zip` (platform covers), `/concept-sets/:id/exports/*.zip` (Test & Compare): `application/zip`, `Content-Disposition: attachment`, the same `sandbox` CSP.
+- `/faces/:id/original.<ext>`, `/faces/:id/cutout.png`, `/faces/:id/thumb.png` (the face pack; images only, never `face.json`), the same CSP.
 - `/kits/:kitId/frames/<file>` and `/kits/:kitId/pictures/<file>`: only the image files that kit's `kit.json` declares, image extensions only, the same CSP; 404 for anything else (kit.json included).
 - `/fonts/*` (with `Access-Control-Allow-Origin: *`, because the UI previews a design in a sandboxed,
   opaque-origin iframe whose font loads are cross-origin) and `web/dist`, with an SPA fallback to
@@ -540,7 +654,7 @@ It uses Fraunces for names and headings, Commissioner for the interface, and Spl
 sizes, versions and costs. It has dark and light themes, honours reduced motion and shows a
 visible focus.
 
-Routes: `/` (start: the three presets and the latest eight projects, "View all"), `/library`,
+Routes: `/` (start: the three presets and the latest eight projects, "View all"), `/library`, `/faces` (the face pack),
 `/new/<preset>` (`?style=<project id>` for "New in this style"), `/p/<id>`, `/c/<set id>` (the compare screen). The library searches by
 title and brief, filters by preset, series and starred, sorts four ways, loads 40 at a time, and has a
 "⋯" menu per card (also in the workspace header: Open, Rename, Star, Duplicate, New in this style,
@@ -644,7 +758,7 @@ appears for 16:9 only and `layout.safe` for 9:16 only. Thresholds live in `LIMIT
 | `text.contrast` | WCAG ratio of the weakest block's colour (alpha applied) against the median luminance of what is behind it. Warn under 3:1 (thumbnail text is large text); 2:1 for text with a stroke or shadow. Gradient-filled text is skipped |
 | `layout.badge` | Warn when text overlaps the bottom-right 15% × 13% by 10% of its area, or a cut-out covers 30% of that zone |
 | `layout.safe` | Warn for text outside 12.5% to 87.5% of the height, in the rail zone, or in the caption zone; or a cut-out whose top is above the crop |
-| `subject.size` | Tallest `<img>` whose `src` contains `cutout` (the name `cut_out` writes), as a share of the canvas height. Warn under 0.5 (16:9, 1:1) or 0.4 (9:16). Faces are not detected: a face is a subject only if it was cut out |
+| `subject.size` | Tallest `<img>` whose `src` contains `cutout` (the name `cut_out` writes) or `face-<8 hex>` (a pack face), as a share of the canvas height. Warn under 0.5 (16:9, 1:1) or 0.4 (9:16). Faces are not detected: a face is a subject only if it was cut out |
 | `image.contrast` | Info: p95 minus p5 of luma at 320 px; the band to aim for is 0.55 to 0.95 |
 | `image.colourfulness` | Info: Hasler and Susstrunk M at 320 px; under 15 muted, 33 or more vivid |
 | `feed.distinct` | Info: mean CIE76 colour difference between this render's mean colour and each neighbour's; under 18 reads as blending in |
@@ -662,7 +776,7 @@ config from `--mcp-config`. It then:
 3. emits stream-json lines: `system/init` with a `session_id`, an assistant `text`, a `tool_use`
    for `mcp__imago__render`, the matching `tool_result`, and a `result` with `total_cost_usd: 0`.
 
-`FAKE_CLAUDE_MODE=signed-out|fail|slow` exercises the error paths; a turn started without the imago MCP server is a planning turn and writes `concepts.json` (`FAKE_CLAUDE_PLANNER=invalid|missing|duplicate` changes what); `FAKE_CLAUDE_FAIL_WHEN=<regex>` kills a turn whose prompt matches; `FAKE_CLAUDE_DELAY_MS` holds a design turn open and `FAKE_CLAUDE_TRACE=<file>` logs when turns start and end (the parallelism tests); `early-fail` dies before `init`, and `resume-fail` answers "No conversation found" to any `--resume`. The fake reads the system prompt file while the turn runs and records it as `systemPrompt` in `fake-claude-call.json`.
+`FAKE_CLAUDE_MODE=signed-out|fail|slow` exercises the error paths; a turn started without the imago MCP server is a planning turn and writes `concepts.json` (`FAKE_CLAUDE_PLANNER=invalid|missing|duplicate` changes what); a turn started without the imago MCP server whose system prompt says "You label photos" is a face classification and writes `labels.json` for every image in `images/` (`FAKE_CLAUDE_FACES=invalid|partial|missing|badjson`), and a planner finding `faces/faces.json` sets `face` on each concept (`FAKE_CLAUDE_PLANNER=badface` names one the pack lacks); `FAKE_CLAUDE_FAIL_WHEN=<regex>` kills a turn whose prompt matches; `FAKE_CLAUDE_DELAY_MS` holds a design turn open and `FAKE_CLAUDE_TRACE=<file>` logs when turns start and end (the parallelism tests); `early-fail` dies before `init`, and `resume-fail` answers "No conversation found" to any `--resume`. The fake reads the system prompt file while the turn runs and records it as `systemPrompt` in `fake-claude-call.json`.
 
 ## Take it further
 
@@ -691,7 +805,7 @@ further": the next turn runs on a stronger model with more freedom and more tool
   `{name, width, height}`. Implemented in `server/stock.mjs`. Images over 100 megapixels are refused,
   names are claimed with `wx`, and `license_url` (in the sidecar, in `search_images` results and when
   read back) is kept only if it is an http(s) URL.
-- After a `fetch_image` or `cut_out` result the server syncs `assets/` into project.json
+- After a `fetch_image`, `cut_out` or `use_face` result the server syncs `assets/` into project.json
   (`syncAssets`). A file with a sidecar becomes `kind: "stock"` with `credit`, `license`,
   `licenseUrl`, `source` and `url`; a cut-out of a credited image inherits the credit.
 - `POST /api/projects/:id/export` also returns `credits`: `[{name, credit, license, licenseUrl, source}]`

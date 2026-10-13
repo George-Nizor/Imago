@@ -15,6 +15,11 @@ The other concepts in the set, which you must not resemble:
 
 {{siblings}}
 
+If your concept names a face from the owner's face pack, its cut-out is already in `assets/` as
+`face-<id>.png`. Use it; `find_faces` and `use_face` can fetch a mirrored copy or a different expression if the
+layout needs one (mirror only when `mirrorSafe`). Read `reference/craft/thumbnail/face-finishing.md`, respect the
+face's quality grade, and make it look toward the text. Do not use a face a sibling has.
+
 Stay clearly different from them in subject, layout, composition and colour treatment, and do not
 reuse their words. A viewer scrolling past all of them should see three different pictures.
 The brief's title, channel colours and series rules still apply to every concept.

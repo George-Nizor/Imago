@@ -72,7 +72,7 @@ function domMeasure() {
     return {
       src: img.getAttribute("src") || "",
       rect: { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) },
-      cutout: /cutout/i.test(img.getAttribute("src") || ""),
+      cutout: /cutout|face-[0-9a-f]{8}/i.test(img.getAttribute("src") || ""),
       opacity: effectiveOpacity(img),
     };
   }).filter((img) => img.rect.w > 1 && img.rect.h > 1 && img.opacity >= 0.05);

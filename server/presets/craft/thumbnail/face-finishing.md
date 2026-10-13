@@ -21,6 +21,40 @@ blend modes. Used together they lift an ordinary frame. Change in small steps an
   photo. If the original background is already simple or can be darkened, skip the cut-out and use
   a full-bleed photo with a vignette.
 
+## Using the face pack
+
+The owner keeps a pack of their own face photos, cut out and labelled. Two tools reach it (they exist
+whether or not the pack has anything in it; an empty pack says so).
+
+- `find_faces({expression?, gesture?, gaze?, minGrade?, count?})` returns the best matches (starred
+  first, hidden never) with their labels and a numbered contact sheet. Expressions: smile, laugh,
+  surprise, shock, excited, thinking, sceptical, confused, intense, angry, sad, neutral (`intensity`
+  1-3). Gestures include point-left, point-right, point-camera, point-up, hands-up, facepalm, thumbs-up,
+  thumbs-down, arms-crossed, hand-on-chin, holding-object. `gaze` is in image terms: `left` looks
+  toward the left edge.
+- `use_face({id, mirror?})` puts the cut-out in `assets/` as `face-<id>.png` (or
+  `face-<id>-mirrored.png`, really flipped), ready to place. Look at the result before relying on it.
+
+When to use it: the video has no better real frame of a person, or the concept names a pack face. A real
+frame from the video's own kit that fits the moment always wins over a pack face, because the thumbnail
+must not promise a moment the video does not have.
+
+How to choose:
+
+1. Ask for the expression that fits the idea, and the gaze that fits the layout: the face looks toward the
+   text, so for text on the right ask for `gaze: right` (or `camera`), for text on the left `gaze: left`.
+2. If the face looks the wrong way, mirror it (`mirror: true`) rather than moving the text, unless
+   `mirrorSafe` is false for it (the owner or a text or logo in the shot rules it out); then pick another
+   face, or move the text to the side the eyes point to.
+3. Respect the grade. Export is 3x, so a face filling half the canvas needs about 1000 px of face in the
+   photo. `4k`: use it at any size. `hd`: keep it to about 40% of the canvas height or less, or accept a
+   little softness. `soft`: only small, as a secondary face or under a heavy grade; prefer another face.
+   Ask with `minGrade: "hd"` when the face will be big.
+4. Several concepts in a set use different faces. Do not reuse the face a sibling has.
+
+The same honesty rules apply as for any picture: a face from the pack is the owner, not the person in
+a moment of the video, so do not pair it with a caption or scene that claims it is that moment.
+
 ## Lifting the face
 
 Apply these on the face image itself, then judge:

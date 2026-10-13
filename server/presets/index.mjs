@@ -166,7 +166,7 @@ export function buildSystemPrompt(project, fontFamilies = []) {
   rules ??= text("design-rules.md");
   if (!presetText.has(project.preset)) presetText.set(project.preset, text(`${project.preset}.md`));
   const assets = project.assets.length
-    ? project.assets.map((a) => `- assets/${a.name} (${a.width}×${a.height}${a.kind === "cutout" ? ", cut-out with transparency" : ""})`).join("\n")
+    ? project.assets.map((a) => `- assets/${a.name} (${a.width}×${a.height}${a.kind === "cutout" ? ", cut-out with transparency" : a.kind === "face" ? ", a face from the owner's face pack, cut out with transparency" : ""})`).join("\n")
     : "(none uploaded)";
   return [
     rules,
@@ -211,6 +211,7 @@ const FORMAT_WORDS = { video: "video thumbnail, 16:9 (1280x720)", shorts: "verti
 /** A concept as plain lines, for the `{{concept}}` and `{{siblings}}` placeholders. */
 export function describeConcept(c) {
   const lines = [`- Archetype: ${c.archetype}`, `- Label: ${c.label}`, `- Idea: ${c.idea}`, `- Text on the image: ${c.text ? `"${c.text}"` : c.text === null || c.text === undefined ? "(your choice: 1-4 words that do not restate the title)" : "(none)"}`];
+  if (c.face) lines.push(`- Face from the owner's face pack: assets/face-${c.face}.png (already cut out, in your assets; use_face makes a mirrored copy when it is safe)`);
   if (c.frame) lines.push(`- Main picture: ${c.frame}`);
   if (c.pictures?.length) lines.push(`- Other pictures: ${c.pictures.join(", ")}`);
   if (c.why) lines.push(`- Why: ${c.why}`);
@@ -219,6 +220,13 @@ export function describeConcept(c) {
 
 let plannerPrompt;
 let conceptPrompt;
+let facesPrompt;
+
+/** The face classifier's system prompt: faces-classify.md with {{count}} filled in. */
+export function facesClassifySection({ count = 1 } = {}) {
+  facesPrompt ??= text("faces-classify.md");
+  return fill(facesPrompt, { count });
+}
 
 /** The planning turn's system prompt: planner.md with {{count}} and {{format}} filled in. */
 export function plannerSection({ count = 3, format = "video" } = {}) {
