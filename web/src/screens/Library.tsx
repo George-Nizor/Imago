@@ -404,6 +404,11 @@ function LibCard({
         {seriesName && (
           <button type="button" className="series-chip" title="Show only this series" onClick={onSeries}>{seriesName}</button>
         )}
+        {p.conceptSet && (
+          <a className="series-chip set-chip" href={`/c/${p.conceptSet.id}`} title="Compare this with the other concepts in its set" onClick={(e) => { e.preventDefault(); navigate(`/c/${p.conceptSet!.id}`); }}>
+            Concept {p.conceptSet.index + 1} · compare
+          </a>
+        )}
       </div>
     </li>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/index.js";
-import type { CreateBody, PresetId, PresetInfo, Project, Size } from "../api/types.js";
+import { PLATFORM_LABELS, type CreateBody, type KitSummary, type PlatformId, type PresetId, type PresetInfo, type Project, type Size } from "../api/types.js";
 import { canCreate, useCaps } from "../caps.js";
 import { Icon } from "../brand/Icon.js";
 import { Btn, CapabilityPanel, Dropzone, Spinner } from "../components.js";
@@ -44,6 +44,27 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
   const [format, setFormat] = useState("video");
   const [custom, setCustom] = useState({ width: "1080", height: "1080" });
   const [files, setFiles] = useState<File[]>([]);
+  // Thumbnails only: a Fabula video to start from, how many concepts, and which platforms a vertical cover is for.
+  const [kits, setKits] = useState<KitSummary[]>([]);
+  const [kitId, setKitId] = useState("");
+  const [count, setCount] = useState(1);
+  const [platforms, setPlatforms] = useState<PlatformId[]>(["youtube-shorts", "instagram-reels", "tiktok"]);
+  useEffect(() => {
+    if (preset === "thumbnail") api.listKits().then((l) => setKits(l.items)).catch(() => {});
+  }, [preset]);
+  const kit = kits.find((k) => k.id === kitId);
+  const [fromKit, setFromKit] = useState(false);
+  function pickKit(k: KitSummary | undefined) {
+    setKitId(k?.id ?? "");
+    if (!k) return;
+    // The kit suggests; the owner edits.
+    setTitle(k.suggested.title);
+    setColours(k.suggested.channelColours);
+    setNotes(k.suggested.notes);
+    setFormat(k.suggested.format);
+  }
+  const asSet = preset === "thumbnail" && !styled && count > 1;
+  const createdSet = useRef<string | null>(null);
 
   const [stages, setStages] = useState<Stage[] | null>(null);
   const [fileNote, setFileNote] = useState<Record<string, string>>({});
@@ -61,12 +82,17 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
     (preset === "thumbnail" ? title.trim().length > 0 : preset === "photo" ? files.length > 0 && instruction.trim().length > 0 : description.trim().length > 0) &&
     (preset !== "graphic" || styled || picked !== undefined || customOk) &&
     (!styled || source !== null) &&
+    (!fromKit || kit !== undefined) &&
     (seriesChoice !== "__new" || seriesName.trim().length > 0);
 
   async function submit() {
     setError("");
     const uploadsFirst = files.length > 0;
-    const plan: Stage[] = [
+    const plan: Stage[] = asSet ? [
+      { label: `Creating ${count} concepts`, state: "doing" },
+      ...(uploadsFirst ? [{ label: "Adding your images to each", state: "todo" as const }] : []),
+      { label: "Starting the planner", state: "todo" },
+    ] : [
       { label: "Creating the project", state: "doing" },
       ...(uploadsFirst ? [{ label: files.length > 1 ? `Uploading ${files.length} images` : "Uploading your image", state: "todo" as const }] : []),
       ...(preset === "thumbnail" && uploadsFirst ? [{ label: "Cutting out the background", state: "todo" as const }] : []),
@@ -83,10 +109,10 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
 
     try {
       let size: Size | undefined;
-      let brief: Record<string, string> = {};
+      let brief: Record<string, string | string[]> = {};
       let projectTitle = "";
       if (preset === "thumbnail") {
-        brief = { format, title: title.trim(), ...(colours.trim() && { channelColours: colours.trim() }), ...(notes.trim() && { notes: notes.trim() }) };
+        brief = { format, title: title.trim(), ...(colours.trim() && { channelColours: colours.trim() }), ...(notes.trim() && { notes: notes.trim() }), ...(format === "shorts" && platforms.length && { platforms }) };
         projectTitle = title.trim();
       } else if (preset === "photo") {
         brief = { instruction: instruction.trim(), aspect };
@@ -97,14 +123,33 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
         projectTitle = shortTitle(description);
         size = picked ? picked.size : { width: Number(custom.width), height: Number(custom.height) };
       }
+      if (asSet) {
+        // Three concepts: the server makes the set and its projects, takes the photos for each, then plans.
+        createdSet.current ??= (await api.createConceptSet({ title: projectTitle, brief, count, ...(fromKit && kitId && { kit: kitId }) })).id;
+        const setId = createdSet.current;
+        if (uploadsFirst) {
+          next();
+          for (const f of files) {
+            if (uploads.current.has(f)) continue;
+            setFileNote((n) => ({ ...n, [f.name]: "Uploading…" }));
+            uploads.current.set(f, { name: (await api.uploadSetAsset(setId, f)).name, cut: false });
+            setFileNote((n) => ({ ...n, [f.name]: "Added to every concept" }));
+          }
+        }
+        next();
+        await api.startConceptSet(setId);
+        mark(at, "done");
+        navigate(`/c/${setId}`);
+        return;
+      }
       if (!createdId.current) {
         if (styled) {
           // The server keeps the source's canvas and format, joins its series and copies its look.
-          createdId.current = (await api.newInStyle(style!, { title: projectTitle, brief })).id;
+          createdId.current = (await api.newInStyle(style!, { title: projectTitle, brief: Object.fromEntries(Object.entries(brief).filter((e): e is [string, string] => typeof e[1] === "string")) })).id;
         } else {
           let series: string | undefined = seriesChoice && seriesChoice !== "__new" ? seriesChoice : undefined;
           if (seriesChoice === "__new") series = createdSeries.current ??= (await api.createSeries(seriesName.trim())).id;
-          const body: CreateBody = { preset, title: projectTitle, brief, ...(size && { size }), ...(series && { series }) };
+          const body: CreateBody = { preset, title: projectTitle, brief, ...(size && { size }), ...(series && { series }), ...(fromKit && kitId && { kit: kitId }) };
           createdId.current = (await api.createProject(body)).id;
         }
       }
@@ -142,7 +187,7 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
       next();
       const uploaded = files.map((f) => uploads.current.get(f)!.name);
       try {
-        await api.sendMessage(projectId, firstMessage(preset, { title, colours, notes, instruction, description, size }, uploaded, styled || (preset === "thumbnail" && Boolean(seriesChoice) && seriesChoice !== "__new" && Boolean(allSeries.find((s) => s.id === seriesChoice)?.styleProjectId))));
+        await api.sendMessage(projectId, firstMessage(preset, { title, colours, notes, instruction, description, size }, uploaded, styled || (preset === "thumbnail" && Boolean(seriesChoice) && seriesChoice !== "__new" && Boolean(allSeries.find((s) => s.id === seriesChoice)?.styleProjectId)), fromKit && Boolean(kitId)));
       } catch {
         // The project and its images exist; the workspace is where the user can send the brief again.
       }
@@ -186,6 +231,29 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
         <fieldset disabled={busy} className="fields">
           {preset === "thumbnail" && (
             <>
+              {!styled && kits.length > 0 && (
+                <div className="field">
+                  <span className="label">Start from</span>
+                  <div className="seg" role="radiogroup" aria-label="Start from">
+                    <button type="button" role="radio" aria-checked={!fromKit} className={!fromKit ? "on" : ""} onClick={() => { setFromKit(false); setKitId(""); }}>A title and your own images</button>
+                    <button type="button" role="radio" aria-checked={fromKit} className={fromKit ? "on" : ""} onClick={() => { setFromKit(true); if (!kit && kits[0]) pickKit(kits[0]); }}>From a Fabula video</button>
+                  </div>
+                  {fromKit && (
+                    <ul className="kit-list" role="radiogroup" aria-label="Fabula videos">
+                      {kits.map((k) => (
+                        <li key={k.id}>
+                          <button type="button" role="radio" aria-checked={kitId === k.id} className="kit-option" onClick={() => pickKit(k)}>
+                            <span className="kit-poster">{k.poster ? <img src={k.poster} alt="" loading="lazy" /> : <Icon name="thumbnail" size={36} className="dim" />}</span>
+                            <span className="kit-name">{k.title}</span>
+                            <span className="muted small mono">{new Date(k.createdAt).toLocaleDateString()} · {k.format} · {k.counts.face + k.counts.screen} frames, {k.counts.pictures} pictures</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {fromKit && <p className="muted small">Its best frames, pictures, hooks and colours go to Claude with the brief. Fill in or change anything below.</p>}
+                </div>
+              )}
               {!styled && <div className="field">
                 <span className="label">Format</span>
                 <div className="seg" role="radiogroup" aria-label="Thumbnail format">
@@ -197,6 +265,28 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
                   ))}
                 </div>
               </div>}
+              {format === "shorts" && !styled && (
+                <div className="field">
+                  <span className="label">For which platforms <em>one design has to work on all you tick</em></span>
+                  <div className="platforms">
+                    {(Object.keys(PLATFORM_LABELS) as PlatformId[]).map((pid) => (
+                      <label key={pid}>
+                        <input type="checkbox" checked={platforms.includes(pid)} onChange={(e) => setPlatforms(e.target.checked ? [...platforms, pid] : platforms.filter((x) => x !== pid))} /> {PLATFORM_LABELS[pid]}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!styled && (
+                <div className="field">
+                  <span className="label">How many concepts</span>
+                  <div className="seg" role="radiogroup" aria-label="Concepts">
+                    <button type="button" role="radio" aria-checked={count === 1} className={count === 1 ? "on" : ""} onClick={() => setCount(1)}>One design</button>
+                    <button type="button" role="radio" aria-checked={count === 3} className={count === 3 ? "on" : ""} onClick={() => setCount(3)}>Three concepts to compare</button>
+                  </div>
+                  {count === 3 && <p className="muted small">Claude plans three different ideas, then designs them side by side. That uses about four times the usage of one design (a planning turn, then three design turns), and the face cut-out is done once and shared.</p>}
+                </div>
+              )}
               <label className="field">
                 <span className="label">Title or topic</span>
                 <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="I built a rocket in my garage" autoFocus />
@@ -213,7 +303,7 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
                 <span className="label">Notes <em>optional</em></span>
                 <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Keep it clean. A rocket in the background would be great." />
               </label>
-              {!styled && <SeriesField series={allSeries} choice={seriesChoice} name={seriesName} onChoice={setSeriesChoice} onName={setSeriesName} />}
+              {!styled && !asSet && <SeriesField series={allSeries} choice={seriesChoice} name={seriesName} onChoice={setSeriesChoice} onName={setSeriesName} />}
             </>
           )}
 
@@ -289,7 +379,7 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
 
         <div className="form-actions">
           <Btn type="submit" variant="primary" icon="sparkle" size={22} disabled={!ready || busy}>
-            {busy ? "Working…" : "Design it"}
+            {busy ? "Working…" : asSet ? "Plan three concepts" : "Design it"}
           </Btn>
           {preset === "graphic" && picked && <span className="mono muted">{picked.group}: {picked.label}, {fmtSize(picked.size)}</span>}
         </div>
@@ -304,6 +394,7 @@ function firstMessage(
   f: { title: string; colours: string; notes: string; instruction: string; description: string; size: Size | undefined },
   assets: string[],
   inSeries = false,
+  withKit = false,
 ): string {
   const list = assets.map((a) => `assets/${a}`).join(", ");
   const series = inSeries ? " This is a new episode in a series: read the series style reference and match it exactly; change only the title and the imagery." : "";
@@ -311,6 +402,7 @@ function firstMessage(
     return [
       `Make a YouTube thumbnail for: ${sentence(f.title)}`,
       assets.length ? `My face photos are ${list}; use them.` : "",
+      withKit ? "The film's own frames and pictures are in assets/ (the From the video section lists them): choose the best expression and read the contact sheet first." : "",
       f.colours.trim() ? `Channel colours: ${sentence(f.colours)}` : "",
       f.notes.trim(),
       series.trim(),

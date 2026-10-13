@@ -25,14 +25,14 @@ export function tempDir(prefix = "imago-test-") {
 }
 
 /** A server on an ephemeral port, its own data dir and the fake claude. */
-export async function startApp(overrides = {}) {
+export async function startApp(overrides = {}, deps = {}) {
   const env = { ...process.env };
   if (!env.IMAGO_CHROMIUM_LIBS && fs.existsSync(LOCAL_CHROMIUM_LIBS)) env.IMAGO_CHROMIUM_LIBS = LOCAL_CHROMIUM_LIBS;
   else if (!env.IMAGO_CHROMIUM_LIBS && fs.existsSync(BORROWED_LIBS)) env.IMAGO_CHROMIUM_LIBS = BORROWED_LIBS;
   const dataDir = tempDir();
-  const config = loadConfig(env, { dataDir, claudeBin: FAKE_CLAUDE, ...overrides });
+  const config = loadConfig(env, { dataDir, claudeBin: FAKE_CLAUDE, fabulaRoots: [], ...overrides });
   config.projectsDir = path.join(config.dataDir, "projects");
-  const app = createServer(config);
+  const app = createServer(config, deps);
   const port = await app.listen(0);
   const base = `http://127.0.0.1:${port}`;
   return {

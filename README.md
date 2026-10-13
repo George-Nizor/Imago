@@ -45,6 +45,8 @@ npm start         # server on http://127.0.0.1:49321
 | `IMAGO_TURN_TIMEOUT_MS` | `600000` | A turn that runs longer is killed. |
 | `IMAGO_FURTHER_MODELS`, `IMAGO_FURTHER_EFFORT` | `opus=claude-opus-5-5,fable=claude-fable-5-1`, `high` | Models and effort for Take it further. |
 | `IMAGO_CLAUDE_BIN` | `claude` | The Claude Code executable. |
+| `IMAGO_FABULA_PROJECTS` | Fabula's projects folder, and a sibling `Fabula/media` | Comma-separated roots searched for Fabula thumbnail kits. |
+| `IMAGO_CONCEPT_CONCURRENCY` | `3` | How many concept design turns run at once. |
 
 Each project is a folder under `<IMAGO_DATA_DIR>/projects/<id>/` holding `project.json`,
 `design.html`, `assets/`, one snapshot and render per version, and `exports/`. Delete a project in

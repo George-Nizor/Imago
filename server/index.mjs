@@ -9,10 +9,13 @@ import { loadConfig, packageVersion } from "./config.mjs";
 import { StyleReferenceError, copyStyleReference, hasReference, queryProjects } from "./library.mjs";
 import { SeriesError, createSeriesStore } from "./series.mjs";
 import { createZipWriter } from "./zip.mjs";
-import { cutOut } from "./cutout.mjs";
+import { cutOut as defaultCutOut } from "./cutout.mjs";
+import { SetError, createConceptSets } from "./concept-sets.mjs";
+import { ExportError, JPEG_BUDGET, PLATFORM_EXPORTS, asciiSlug, renderJpg, writeZip } from "./exports.mjs";
+import { KitError, discoverKits, findKit, importKitInto, kitFilePath, kitSummary, suggestedBrief } from "./kits.mjs";
 import { validateDesignFile } from "./design-files.mjs";
 import { PathError, isProjectId, isSafeLeaf } from "./paths.mjs";
-import { EXPORT_SCALES, MAX_EXPORT_EDGE, MAX_SIDE, MIN_SIDE, PHOTO_ASPECTS, PRESETS, THUMBNAIL_FORMATS, allowedScales, presetById, thumbnailFormat } from "./presets/index.mjs";
+import { EXPORT_SCALES, MAX_EXPORT_EDGE, MAX_SIDE, MIN_SIDE, PHOTO_ASPECTS, PLATFORMS, PRESETS, THUMBNAIL_FORMATS, allowedScales, briefPlatforms, presetById, thumbnailFormat } from "./presets/index.mjs";
 import { RenderError, renderHtml } from "./renderer.mjs";
 import { StoreError, createStore } from "./store.mjs";
 
@@ -31,6 +34,7 @@ const TYPES = {
   ".woff2": "font/woff2",
   ".ico": "image/x-icon",
   ".txt": "text/plain; charset=utf-8",
+  ".zip": "application/zip",
 };
 const DESIGN_CSP = "sandbox; default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'";
 // Anything else from a project folder (images only): inert, whatever its bytes turn out to be.
@@ -84,7 +88,8 @@ const dimension = (n) => Number.isInteger(n) && n >= MIN_SIDE && n <= MAX_SIDE;
 const cleanText = (value, max) => (typeof value === "string" ? value.trim().slice(0, max) : "");
 
 /** A loopback-only server; `createServer(config)` returns {server, listen, close, port}. */
-export function createServer(config = loadConfig()) {
+export function createServer(config = loadConfig(), deps = {}) {
+  const cutOut = deps.cutOut ?? defaultCutOut;
   const store = createStore(config.projectsDir);
   const seriesStore = createSeriesStore(config.dataDir);
   const capabilities = createCapabilities(config);
@@ -112,9 +117,11 @@ export function createServer(config = loadConfig()) {
   const emit = (id, event, data) => {
     const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of subscribers.get(id) ?? []) res.write(frame);
+    sets.onProjectEvent(id, event, data);
   };
   const heartbeat = setInterval(() => {
     for (const set of subscribers.values()) for (const res of set) res.write(": heartbeat\n\n");
+    sets.heartbeat();
   }, 15_000);
   heartbeat.unref();
 
@@ -138,23 +145,85 @@ export function createServer(config = loadConfig()) {
     fs.createReadStream(file).pipe(res);
   }
 
+  /**
+   * Takes the project's turn slot, writes `running` and starts the turn in the background. Resolves once
+   * the turn is under way with `done`, which settles with the turn's result (it never rejects).
+   */
+  async function beginTurn(id, { text, mode = "standard", modelKey = "opus", concept = null }) {
+    if (busy(id)) throw new HttpError(409, "TURN_RUNNING", "A turn is already running for this project.");
+    const slot = takeSlot(id);
+    try {
+      // `running` is on disk before the 202, so a reload right after sending never sees an idle project.
+      await store.mutate(id, (p) => void (p.running = true));
+    } catch (error) {
+      slot.finish();
+      throw error;
+    }
+    const done = runTurn({ config, store, id, text, mode, modelKey, concept, emit: (e, d2) => emit(id, e, d2), signal: slot.controller.signal, release: slot.release })
+      .catch((error) => {
+        emit(id, "run.error", { code: "EXITED", message: error.message });
+        return { ok: false, failure: { code: "EXITED", message: error.message }, costUsd: 0 };
+      })
+      .then(async (result) => {
+        await store.mutate(id, (p) => void (p.running = false)).catch(() => {});
+        return result;
+      })
+      .finally(() => {
+        slot.finish();
+        capabilities.invalidate();
+      });
+    return { done };
+  }
+
+  const sets = createConceptSets({
+    config,
+    store,
+    createProject: (body, opts) => createProject(body, opts),
+    startTurn: async (id, opts) => (await beginTurn(id, opts)).done,
+    abortProject: (id) => turns.get(id)?.controller.abort(),
+    cutOut,
+  });
+
   // ---- API ---------------------------------------------------------------------------------
 
-  async function createProject(body) {
+  /** The thumbnail brief from what the form sent, with a kit's suggestions filling the blanks. */
+  function thumbnailBrief(given, kit) {
+    const suggested = kit ? suggestedBrief(kit.kit) : {};
+    const merged = {};
+    for (const key of ["title", "channelColours", "notes", "format"]) merged[key] = cleanText(given[key], 4000) || suggested[key] || "";
+    const format = merged.format || "video";
+    const chosen = thumbnailFormat(format);
+    if (!chosen) throw new HttpError(400, "BAD_FORMAT", `format must be one of ${THUMBNAIL_FORMATS.map((f) => f.id).join(", ")}.`);
+    const brief = { title: merged.title, channelColours: merged.channelColours, notes: merged.notes, format };
+    if (given.platforms !== undefined) {
+      if (!Array.isArray(given.platforms)) throw new HttpError(400, "BAD_PLATFORMS", `platforms must be a list of ${Object.keys(PLATFORMS).join(", ")}.`);
+      if (format === "shorts") brief.platforms = briefPlatforms(given);
+    }
+    return { brief, size: { width: chosen.width, height: chosen.height } };
+  }
+
+  async function kitFor(id) {
+    return findKit(config.fabulaRoots, id);
+  }
+
+  /** `opts`: kit (an entry already resolved), sheetFrom, extra (project.json fields), cloneFrom (a project to copy kit material from). */
+  async function createProject(body, opts = {}) {
     const preset = presetById(body.preset);
     if (!preset) throw new HttpError(400, "BAD_PRESET", `preset must be one of ${PRESETS.map((p) => p.id).join(", ")}.`);
+    let kit = opts.kit ?? null;
+    if (!kit && body.kit !== undefined && body.kit !== null) {
+      if (preset.id !== "thumbnail") throw new HttpError(400, "BAD_KIT", "A Fabula kit is for thumbnails.");
+      kit = await kitFor(body.kit);
+    }
     const brief = {};
     const given = body.brief && typeof body.brief === "object" ? body.brief : {};
-    for (const field of preset.briefFields) brief[field.id] = cleanText(given[field.id], 4000);
     let size = preset.defaultSize ?? { width: 1280, height: 720 };
-    let extra = {};
+    let extra = { ...opts.extra };
     if (preset.id === "thumbnail") {
-      const format = cleanText(given.format, 10) || "video";
-      const chosen = thumbnailFormat(format);
-      if (!chosen) throw new HttpError(400, "BAD_FORMAT", `format must be one of ${THUMBNAIL_FORMATS.map((f) => f.id).join(", ")}.`);
-      brief.format = format;
-      size = { width: chosen.width, height: chosen.height };
-    }
+      const made = thumbnailBrief(given, kit);
+      Object.assign(brief, made.brief);
+      size = made.size;
+    } else for (const field of preset.briefFields) brief[field.id] = cleanText(given[field.id], 4000);
     const asked = body.size;
     if (preset.id === "thumbnail") {
       // The format decides the canvas; a size in the body is ignored, not validated.
@@ -165,7 +234,7 @@ export function createServer(config = loadConfig()) {
       const aspect = cleanText(given.aspect, 10) || "original";
       if (!PHOTO_ASPECTS.includes(aspect)) throw new HttpError(400, "BAD_ASPECT", `aspect must be one of ${PHOTO_ASPECTS.join(", ")}.`);
       brief.aspect = aspect;
-      extra = { sizeAuto: true };
+      extra = { ...extra, sizeAuto: true };
     }
     const title = cleanText(body.title, 80) || cleanText(Object.values(brief)[0], 60) || preset.label;
     let seriesId = null;
@@ -174,8 +243,30 @@ export function createServer(config = loadConfig()) {
       extra = { ...extra, series: seriesId };
     }
     const created = await store.create({ preset: preset.id, title, size, brief, extra });
+    try {
+      if (kit) await importKitInto(config, store, created.id, kit, { sheetFrom: opts.sheetFrom });
+      else if (opts.cloneFrom) await cloneKitMaterial(opts.cloneFrom, created.id);
+    } catch (error) {
+      await store.remove(created.id).catch(() => {});
+      throw error;
+    }
     if (seriesId) await ensureReference(created.id, seriesId);
-    return created;
+    return kit || opts.cloneFrom ? store.read(created.id) : created;
+  }
+
+  /** Copies a donor project's kit images, uploads and kit.json into another project (for "another concept"). */
+  async function cloneKitMaterial(donorId, id) {
+    const donor = await store.read(donorId);
+    const keep = donor.assets.filter((a) => a.kind === "kit" || a.kind === "upload");
+    const from = store.dirOf(donorId);
+    const to = store.dirOf(id);
+    for (const a of keep) await fs.promises.copyFile(path.join(from, "assets", a.name), path.join(to, "assets", a.name));
+    await fs.promises.mkdir(path.join(to, "reference"), { recursive: true });
+    await fs.promises.copyFile(path.join(from, "reference", "kit.json"), path.join(to, "reference", "kit.json")).catch(() => {});
+    await store.mutate(id, (p) => {
+      p.assets = structuredClone(keep);
+      if (donor.kit) p.kit = donor.kit;
+    });
   }
 
   /** A series id that exists, or 400 BAD_SERIES. */
@@ -348,6 +439,114 @@ export function createServer(config = loadConfig()) {
     res.end();
   }
 
+  // ---- concept sets ------------------------------------------------------------------------
+
+  async function uploadBytes(req) {
+    if (!req.headers["x-filename"]) throw new HttpError(400, "MISSING_FILENAME", "Uploads need an x-filename header.");
+    const type = contentType(req);
+    if (type && type !== "application/octet-stream" && !["image/png", "image/jpeg", "image/webp"].includes(type)) throw new HttpError(415, "BAD_CONTENT_TYPE", "Send the image with its own type or application/octet-stream.");
+    return { filename: decodeHeader(req.headers["x-filename"]), bytes: await readBody(req, MAX_UPLOAD_BYTES) };
+  }
+
+  /** Test & Compare: each chosen concept's current design at 3840x2160 JPG, under 2 MB, in one zip. */
+  async function testCompare(id, body) {
+    const set = await sets.view(id);
+    if (!set.testCompare) throw new HttpError(400, "NOT_VIDEO", "Test & Compare is for 16:9 video thumbnails; Shorts are not eligible.");
+    const ready = set.concepts.filter((c) => !c.removed && c.current > 0);
+    let chosen = ready;
+    if (body.projects !== undefined) {
+      if (!Array.isArray(body.projects) || !body.projects.every(isProjectId)) throw new HttpError(400, "BAD_IDS", "projects must be a list of project ids.");
+      chosen = ready.filter((c) => body.projects.includes(c.projectId));
+    }
+    if (!chosen.length) throw new HttpError(409, "NO_RENDERS", "None of the concepts has a render yet.");
+    if (chosen.length > 3) throw new HttpError(400, "TOO_MANY", "YouTube compares at most three thumbnails; choose up to three concepts.");
+    if (chosen.some((c) => busy(c.projectId))) throw new HttpError(409, "TURN_RUNNING", "A concept is still being designed; export after it finishes.");
+    const dir = path.join(sets.dirOf(id), "exports");
+    await fs.promises.rm(dir, { recursive: true, force: true });
+    await fs.promises.mkdir(dir, { recursive: true });
+    const files = [];
+    for (const [n, c] of chosen.entries()) {
+      const name = `thumbnail-${n + 1}-${asciiSlug(c.label ?? c.title, "concept")}.jpg`;
+      const out = await renderJpg(config, store, c.projectId, { width: 3840, out: path.join(dir, name) });
+      files.push({ name, project: c.projectId, width: out.width, height: out.height, bytes: out.bytes, quality: out.quality, overBudget: out.overBudget });
+    }
+    const zipName = `${id}-test-and-compare.zip`.slice(-120).replace(/^[^A-Za-z0-9]+/, "");
+    const bytes = await writeZip(path.join(dir, zipName), files.map((f) => ({ name: f.name, file: path.join(dir, f.name) })));
+    for (const f of files) await fs.promises.rm(path.join(dir, f.name), { force: true });
+    return { name: zipName, url: `/concept-sets/${id}/exports/${zipName}`, bytes, files };
+  }
+
+  async function conceptApi(req, res, b, c) {
+    const method = req.method;
+    if (!b) {
+      if (method !== "POST") throw new HttpError(405, "METHOD", "Method not allowed.");
+      const body = await readJson(req);
+      const count = body.count ?? 3;
+      if (!Number.isInteger(count) || count < 2 || count > 4) throw new HttpError(400, "BAD_COUNT", "A concept set holds 2 to 4 concepts; for one design make an ordinary project.");
+      const kit = body.kit !== undefined && body.kit !== null ? await kitFor(body.kit) : null;
+      const given = body.brief && typeof body.brief === "object" ? body.brief : {};
+      const { brief } = thumbnailBrief(given, kit);
+      const title = cleanText(body.title, 80) || brief.title || "Thumbnails";
+      if (!brief.title) throw new HttpError(400, "NEEDS_TITLE", "A concept set needs a title or topic.");
+      const set = await sets.create({ title, brief, kit, count, format: brief.format, createProject });
+      return sendJson(res, 201, await sets.view(set.id));
+    }
+    if (!isProjectId(b)) throw new HttpError(400, "BAD_ID", "Invalid concept set id.");
+    if (!c) {
+      if (method === "GET") return sendJson(res, 200, await sets.view(b));
+      throw new HttpError(405, "METHOD", "Method not allowed.");
+    }
+    if (c === "events" && method === "GET") {
+      const off = await sets.subscribe(b, res);
+      req.on("close", off);
+      return undefined;
+    }
+    if (method !== "POST") throw new HttpError(405, "METHOD", "Method not allowed.");
+    if (c === "assets") {
+      const { filename, bytes } = await uploadBytes(req);
+      return sendJson(res, 201, await sets.addUpload(b, filename, bytes, saveUpload));
+    }
+    if (c === "start") return sendJson(res, 202, await sets.start(b));
+    if (c === "cancel") return sendJson(res, 200, await sets.cancel(b));
+    if (c === "another") return sendJson(res, 202, await sets.another(b));
+    if (c === "test-compare") return sendJson(res, 200, await testCompare(b, await readJson(req)));
+    throw new HttpError(404, "NOT_FOUND", "Unknown API route.");
+  }
+
+  /** Vertical covers: YouTube Shorts 2160x3840, Reels and TikTok 1080x1920, JPG under 2 MB; several make a zip. */
+  async function platformExport(id, body) {
+    if (busy(id)) throw new HttpError(409, "TURN_RUNNING", "A turn is running; export after it finishes.");
+    const p = await project(id);
+    if (p.preset !== "thumbnail" || p.size.width !== 720 || p.size.height !== 1280) throw new HttpError(400, "NOT_SHORTS", "Platform covers are for vertical (Shorts) thumbnails.");
+    if (!p.current) throw new HttpError(409, "NO_RENDERS", "There is no render to export yet.");
+    let wanted = body.platforms;
+    if (wanted === undefined || wanted === null) wanted = briefPlatforms(p.brief).length ? briefPlatforms(p.brief) : Object.keys(PLATFORM_EXPORTS);
+    if (!Array.isArray(wanted) || !wanted.length || !wanted.every((x) => Object.hasOwn(PLATFORM_EXPORTS, x))) throw new HttpError(400, "BAD_PLATFORMS", `platforms must be some of ${Object.keys(PLATFORM_EXPORTS).join(", ")}.`);
+    wanted = [...new Set(wanted)];
+    const dir = path.join(store.dirOf(id), "exports");
+    const files = [];
+    const byWidth = new Map();
+    for (const platform of wanted) {
+      const target = PLATFORM_EXPORTS[platform];
+      const name = `${id}-v${p.current}-${platform}-${target.width}x${target.height}.jpg`.slice(-120).replace(/^[^A-Za-z0-9]+/, "");
+      // Reels and TikTok are the same pixels; render once.
+      if (byWidth.has(target.width)) await fs.promises.copyFile(path.join(dir, byWidth.get(target.width)), path.join(dir, name));
+      else {
+        const out = await renderJpg(config, store, id, { width: target.width, out: path.join(dir, name) });
+        byWidth.set(target.width, name);
+        files.push({ platform, name, width: out.width, height: out.height, bytes: out.bytes, quality: out.quality, overBudget: out.overBudget });
+        continue;
+      }
+      const stat = await fs.promises.stat(path.join(dir, name));
+      const first = files.find((f) => f.name === byWidth.get(target.width));
+      files.push({ platform, name, width: target.width, height: target.height, bytes: stat.size, quality: first?.quality ?? 92, overBudget: stat.size > JPEG_BUDGET });
+    }
+    if (files.length === 1) return { ...files[0], url: `/projects/${id}/exports/${files[0].name}`, files };
+    const zipName = `${id}-v${p.current}-covers.zip`.slice(-120).replace(/^[^A-Za-z0-9]+/, "");
+    const bytes = await writeZip(path.join(dir, zipName), files.map((f) => ({ name: `${f.platform}-${f.width}x${f.height}.jpg`, file: path.join(dir, f.name) })));
+    return { name: zipName, url: `/projects/${id}/exports/${zipName}`, bytes, width: null, height: null, files };
+  }
+
   async function api(req, res, url, segs) {
     const method = req.method;
     const [, , a, b, c, d] = segs; // ["", "api", ...]
@@ -356,6 +555,11 @@ export function createServer(config = loadConfig()) {
     if (a === "presets" && method === "GET") return sendJson(res, 200, PRESETS);
     if (a === "fonts" && method === "GET") return sendFile(res, path.join(config.fontsDir, "fonts.json"));
     if (a === "series") return seriesApi(req, res, b, c);
+    if (a === "kits" && method === "GET" && !b) {
+      const { found, rejected } = await discoverKits(config.fabulaRoots);
+      return sendJson(res, 200, { items: found.map(kitSummary), rejected });
+    }
+    if (a === "concept-sets") return conceptApi(req, res, b, c);
     if (a !== "projects") throw new HttpError(404, "NOT_FOUND", "Unknown API route.");
 
     if (!b) {
@@ -454,22 +658,7 @@ export function createServer(config = loadConfig()) {
       const text = cleanText(body.text, 20_000) || (mode === "further" ? FURTHER_DIRECTION : "");
       if (!text) throw new HttpError(400, "EMPTY", "text is required.");
       await project(id);
-      if (busy(id)) throw new HttpError(409, "TURN_RUNNING", "A turn is already running for this project.");
-      const slot = takeSlot(id);
-      try {
-        // `running` is on disk before the 202, so a reload right after sending never sees an idle project.
-        await store.mutate(id, (p) => void (p.running = true));
-      } catch (error) {
-        slot.finish();
-        throw error;
-      }
-      runTurn({ config, store, id, text, mode, modelKey, emit: (e, d2) => emit(id, e, d2), signal: slot.controller.signal, release: slot.release })
-        .catch((error) => emit(id, "run.error", { code: "EXITED", message: error.message }))
-        .then(() => store.mutate(id, (p) => void (p.running = false)).catch(() => {}))
-        .finally(() => {
-          slot.finish();
-          capabilities.invalidate();
-        });
+      await beginTurn(id, { text, mode, modelKey });
       return sendJson(res, 202, { ok: true });
     }
 
@@ -511,6 +700,8 @@ export function createServer(config = loadConfig()) {
         slot.finish();
       }
     }
+
+    if (c === "platform-export" && method === "POST") return sendJson(res, 200, await platformExport(id, await readJson(req)));
 
     if (c === "export" && method === "POST") {
       const body = await readJson(req);
@@ -559,6 +750,10 @@ export function createServer(config = loadConfig()) {
       res.writeHead(200, { "content-type": TYPES[".html"], "cache-control": "no-store", "content-security-policy": DESIGN_CSP });
       return res.end(body);
     }
+    if (area === "exports" && file && !extra && /\.zip$/i.test(file)) {
+      if (!isSafeLeaf(file)) throw new PathError("unsafe file name");
+      return sendFile(res, path.join(dir, area, file), { "content-security-policy": FILE_CSP, "content-disposition": `attachment; filename="${file}"` });
+    }
     if (["assets", "renders", "exports"].includes(area) && file && !extra) {
       if (!isSafeLeaf(file)) throw new PathError("unsafe file name");
       // Only images are served from these folders (sidecars, stray html or svg are not).
@@ -566,6 +761,26 @@ export function createServer(config = loadConfig()) {
       return sendFile(res, path.join(dir, area, file), { "content-security-policy": FILE_CSP });
     }
     throw new HttpError(404, "NOT_FOUND", "Not found.");
+  }
+
+  /** A kit's images, read-only and image-only, only the files its kit.json declares. */
+  async function kitFiles(res, segs) {
+    // ["", "kits", id, folder, leaf]
+    const [, , id, folder, leaf, extra] = segs;
+    if (!id || !folder || !leaf || extra || !isSafeLeaf(leaf) || !["frames", "pictures"].includes(folder)) throw new HttpError(404, "NOT_FOUND", "Not found.");
+    if (!IMAGE_EXTENSIONS.has(path.extname(leaf).toLowerCase())) throw new HttpError(404, "NOT_FOUND", "Not found.");
+    const entry = await kitFor(id).catch(() => null);
+    const real = entry && kitFilePath(entry, `${folder}/${leaf}`);
+    if (!real) throw new HttpError(404, "NOT_FOUND", "Not found.");
+    return sendFile(res, real, { "content-security-policy": FILE_CSP });
+  }
+
+  /** A set's finished export zip. */
+  async function setExports(res, segs) {
+    // ["", "concept-sets", id, "exports", file]
+    const [, , id, area, file, extra] = segs;
+    if (!isProjectId(id) || area !== "exports" || !file || extra || !isSafeLeaf(file) || !/\.zip$/i.test(file)) throw new HttpError(404, "NOT_FOUND", "Not found.");
+    return sendFile(res, path.join(sets.dirOf(id), "exports", file), { "content-security-policy": FILE_CSP, "content-disposition": `attachment; filename="${file}"` });
   }
 
   async function webFiles(res, pathname) {
@@ -610,6 +825,8 @@ export function createServer(config = loadConfig()) {
       if (segs[1] === "api") return await api(req, res, url, segs);
       if (req.method !== "GET" && req.method !== "HEAD") throw new HttpError(405, "METHOD", "Method not allowed.");
       if (segs[1] === "projects") return await projectFiles(res, segs, (id) => `/projects/${id}/`);
+      if (segs[1] === "kits") return await kitFiles(res, segs);
+      if (segs[1] === "concept-sets") return await setExports(res, segs);
       if (segs[1] === "fonts" && segs[2] && !segs[3]) {
         if (!isSafeLeaf(segs[2])) throw new PathError("unsafe file name");
         // Designs preview in a sandboxed (opaque-origin) frame, whose font loads are cross-origin requests.
@@ -617,7 +834,7 @@ export function createServer(config = loadConfig()) {
       }
       return await webFiles(res, url.pathname);
     } catch (error) {
-      const known = error instanceof HttpError || error instanceof StoreError || error instanceof UploadError || error instanceof SeriesError || error instanceof StyleReferenceError;
+      const known = error instanceof HttpError || error instanceof StoreError || error instanceof UploadError || error instanceof SeriesError || error instanceof StyleReferenceError || error instanceof KitError || error instanceof SetError || error instanceof ExportError;
       const status = known ? error.status : error instanceof PathError ? 400 : 500;
       const code = known ? error.code : error instanceof PathError ? "BAD_PATH" : "INTERNAL";
       if (res.headersSent) return res.end();
@@ -629,10 +846,12 @@ export function createServer(config = loadConfig()) {
   return {
     server,
     store,
+    sets,
     config,
     capabilities,
     async listen(port = config.port, host = config.host) {
       await store.clearStaleRunning();
+      await sets.recover();
       await store.purgeTrash().catch(() => {});
       await new Promise((resolve, reject) => {
         server.once("error", reject);
@@ -642,6 +861,7 @@ export function createServer(config = loadConfig()) {
     },
     async close() {
       clearInterval(heartbeat);
+      sets.abortAll();
       for (const { controller } of turns.values()) controller.abort();
       for (const set of subscribers.values()) for (const res of set) res.end();
       server.closeAllConnections?.();

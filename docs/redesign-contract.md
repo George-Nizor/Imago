@@ -26,6 +26,9 @@ Imago/
 │   ├── series.mjs      series.json (series metadata)
 │   ├── library.mjs     list query (filter, sort, page) and the style-reference copy
 │   ├── zip.mjs         a store-only zip writer for the library's Export
+│   ├── kits.mjs        Fabula thumbnail kits: discovery, strict validation, import, contact sheet, the "From the video" prompt section
+│   ├── concept-sets.mjs   concept sets: planner, parallel design turns, fallback, cancel, another concept
+│   ├── exports.mjs     Test & Compare and per-platform JPG exports under a size budget
 │   └── presets/        design-rules.md, thumbnail.md, photo.md, graphic.md, series.md, further.md, planner.md, concept.md, craft/<preset>/
 ├── render/render.cjs   headless Electron: design.html -> png|jpg|webp, plus measurements and the feed capture
 │   (dom-measure.cjs runs inside the page; measure.cjs is the pixel maths)
@@ -42,12 +45,14 @@ Scripts: `npm start` (server), `npm run dev` (server and Vite together, Vite pro
 - `PORT` comes from the environment (default `49321`). The server always binds `127.0.0.1`; there is
   no `HOST` setting. Never listen on anything but loopback.
 - `IMAGO_WEB_ROOT` is the built UI, `web/dist` by default, resolved against the package root.
-- `IMAGO_DATA_DIR` holds the projects (`projects/`), `series.json` and the trash (`projects/.trash/`), `~/.local/share/imago` by default.
+- `IMAGO_DATA_DIR` holds the projects (`projects/`), `series.json`, the concept sets (`concept-sets/`) and the trash (`projects/.trash/`), `~/.local/share/imago` by default.
 - `IMAGO_CLAUDE_BIN` is `claude` by default. Tests point it at `tests/fixtures/fake-claude.mjs`.
 - `IMAGO_MODEL` defaults to `claude-sonnet-5-5`. `IMAGO_EFFORT` defaults to `medium`.
 - `IMAGO_FURTHER_MODELS` defaults to `opus=claude-opus-5-5,fable=claude-fable-5-1`: the models a
   "Take it further" turn can use. `IMAGO_FURTHER_EFFORT` defaults to `high`.
 - `IMAGO_TURN_TIMEOUT_MS` defaults to 600000.
+- `IMAGO_FABULA_PROJECTS` is a comma-separated list of Fabula project roots searched for thumbnail kits. Default: `~/.local/share/fabula/projects`, plus the sibling checkout's `../Fabula/media` when it exists. Only `<root>/<project>/out/thumbnail-kit/` is ever read.
+- `IMAGO_CONCEPT_CONCURRENCY` defaults to 3: how many concept design turns run at once, across all sets (1 to 8).
 - `IMAGO_ALLOWED_ORIGINS` is empty by default: extra browser origins (comma separated) allowed to make
   changing requests. `npm run dev` sets the Vite origins (`http://127.0.0.1:5173`, `http://localhost:5173`).
 - `IMAGO_ELECTRON_BIN` is the `electron` package binary by default.
@@ -61,12 +66,12 @@ the title plus a short random suffix).
 project.json
 design.html             current design; what the preview shows
 assets/                 uploads, cutouts (safe leaf names only)
-reference/              style-reference.html: the series reference design (see Library); never served
+reference/              style-reference.html: the series reference design (see Library); kit.json (see Fabula kits); never served
 reference/craft/        the preset's craft files, copied in by the server on every turn (see Thumbnail craft); never served
 versions/v<n>.html      snapshot taken at each render
 renders/v<n>.png        the render of that snapshot, at scale 1
 renders/v<n>-feed.png   thumbnails only: that render in a feed mock-up (see "Feed mock-up and checks")
-exports/                files made by Export
+exports/                files made by Export (JPGs, and the zips of platform covers)
 ```
 
 `project.json`:
@@ -82,15 +87,21 @@ exports/                files made by Export
   "sessionId": null,
   "briefSent": false,
   "brief": { "free-form fields from the start form": "" },
-  "assets": [{ "name": "face.png", "kind": "upload|cutout|stock", "width": 0, "height": 0, "from": null }],
+  "assets": [{ "name": "face.png", "kind": "upload|cutout|stock|reference|kit", "width": 0, "height": 0, "from": null }],
   "messages": [{ "role": "user|assistant", "text": "", "at": "ISO", "version": null, "mode": "standard|further", "model": "claude-..." }],
   "versions": [{ "n": 1, "at": "ISO", "warnings": [], "checks": [{ "id": "text.words", "level": "ok", "value": 3, "message": "3 words." }] }],
   "current": 1,
   "running": false,
   "series": null,
-  "starred": false
+  "starred": false,
+  "conceptSet": { "id": "set-3k9x", "index": 0, "archetype": "reaction", "label": "Shocked first look" },
+  "kit": { "id": "…", "title": "…", "project": "…", "createdAt": "ISO", "contactSheet": true }
 }
 ```
+
+`conceptSet` and `kit` exist only on projects made as one concept of a set, or from a Fabula kit (see "Fabula
+kits" and "Concept sets"); `archetype` and `label` are null until the planner has run. A project without them is an
+ordinary one.
 
 `series` (a series id or null) and `starred` belong to the library; a `project.json` without them
 counts as no series and not starred. A duplicate also carries `duplicatedFrom` (the source id).
@@ -108,7 +119,7 @@ and `assets/`.
 
 | id | Default size | Brief fields |
 | --- | --- | --- |
-| `thumbnail` | by `brief.format`: `video` 16:9 1280×720 (default), `shorts` 9:16 720×1280, `podcast` 1:1 1280×1280 | `title` (the video's title or topic), `channelColours?`, `notes?`, `format?`; the brief may also carry `platforms?` (see Thumbnail craft) |
+| `thumbnail` | by `brief.format`: `video` 16:9 1280×720 (default), `shorts` 9:16 720×1280, `podcast` 1:1 1280×1280 | `title` (the video's title or topic), `channelColours?`, `notes?`, `format?`; the brief may also carry `platforms?` (an array, kept only for `shorts`; see Thumbnail craft). `POST /api/projects` also takes `kit` (see Fabula kits) |
 | `photo` | the first uploaded photo's own size, or an aspect chosen from `original, 1:1, 4:5, 3:4, 2:3, 9:16, 4:3, 3:2, 16:9, 21:9` (long edge kept at most 2160) | `instruction` |
 | `graphic` | chosen from the grouped catalogue below, or custom (64–4096 each side) | `description` |
 
@@ -119,7 +130,7 @@ export at 3×. `POST /api/projects` takes the size from `brief.format`; an unkno
 `BAD_FORMAT`, and a `size` in the body is ignored for thumbnails (not even validated). The export menu defaults to 3×
 ("4K, YouTube's recommended size") and JPG for thumbnails, 1.5× stays "1080p", and after an export it
 shows the file size, warning when it is over 2 MB (too big for the mobile app, fine on desktop;
-choose JPG if it was PNG). JPG quality is 0.92 (`render.cjs`).
+choose JPG if it was PNG). JPG quality is 0.92 by default (`render.cjs`, `--quality` changes it).
 
 **Graphic sizes** (`GET /api/presets` gives each a `group`; the UI lists them in a select with
 groups, plus Custom). Print sizes are at 150 dpi. The Facebook cover is 1640×624, twice its 820×312
@@ -197,6 +208,141 @@ Marker (hand marker, Apache-2.0; the others are SIL OFL 1.1). A face with a widt
 `stretch` range in `fonts.json` and a `font-stretch` range in `fonts.css`. Only OFL or Apache-2.0
 faces may be added.
 
+## Fabula kits
+
+Fabula's thumbnail kit, schema v1 (the shared plan is `Instrumenta/docs/suite/thumbnail-uplift.md`), is the one
+thing Imago takes from a Fabula project. Imago reads only `<root>/<project>/out/thumbnail-kit/kit.json` and the image
+files it names, under the roots in `IMAGO_FABULA_PROJECTS`; never anything else of a Fabula project.
+
+**Validation (`server/kits.mjs`, strict).** A kit is refused, with a reason that never contains a path, when: `kind`
+is not `instrumenta.thumbnail-kit` or `schemaVersion` is not 1; `kit.json` is over 1 MB, not JSON, or any field has
+the wrong type (`source.format` not `landscape|vertical|square`, a tag outside `smile, laugh, surprise, intense,
+speaking, pointing, neutral`, a hook kind outside `promise, claim, number, question, quote`, a colour that is not
+`#RRGGBB`); there are more than 12 face frames, 6 screen frames, 12 pictures or 6 hooks; a `file` is not exactly
+`frames/<leaf>` (or `pictures/<leaf>` for a picture) with a safe leaf and an image extension, or is listed twice; a
+named file is missing, is not a regular file, resolves (symlinks included) outside the kit folder, is over 25 MB, or
+is not a real PNG, JPEG or WebP by its header (over 100 megapixels is refused too); the kit folder itself resolves
+outside its root. Text fields are stripped of control characters and capped. The declared `width`/`height` must be
+positive integers; the image's own header is what is stored. A refused kit is not listed (it shows under `rejected`).
+
+**API.** `GET /api/kits` lists valid kits newest first (`createdAt` of the kit): `{id, title, project, format
+(landscape|vertical|square), thumbnailFormat (video|shorts|podcast), createdAt, durationSeconds, producer, logline,
+counts {face, screen, pictures, hooks, chapters}, poster (a /kits/... URL: the first face frame), suggested {title,
+channelColours, notes, format}}`. The `id` is a hash of the kit's real folder, so it reveals no path. Discovery results
+are cached by the size and mtime of the kit's files.
+
+**Import** (`POST /api/projects` with `kit`, and for every project of a set). Frames and pictures are copied to
+`assets/kit-<leaf>` (`kit-f01.jpg`, `kit-s01.jpg`, `kit-boss-billy.png`) as assets of kind `kit` (`kitFile`,
+`kitKind` face or screen); a picture with a credit carries `credit`, `license`, `source` into its asset record as stock does, so
+`creditsFor` and the export's credits list it. The validated kit is written to `reference/kit.json`. A contact sheet
+`assets/kit-contact-sheet.png` (a numbered grid, each cell labelled with its file name, kind, time and tags, about 1500 px
+wide, rendered by the normal renderer from a temporary page that is removed; if the renderer is missing there is no sheet) is
+added, and `project.kit` marks the project. The brief is prefilled where blank: `title` from `source.title`, `channelColours`
+from `style.colours` ("accent #E8413C, text #F4F0E6"), `notes` from the logline, `format` from `source.format`
+(landscape to `video`, vertical to `shorts`, square to `podcast`); anything the form sent wins.
+
+**The first prompt** (`kitPromptSection`, sent while the brief is sent, also in a recovery prompt): after the brief, a
+"From the video" section with the film's title, format and length, logline, purpose, look, hooks (kind, words, time),
+chapters, a frame table (file, kind, time, tags, key signals and face box, words), the pictures with sizes, times and
+credits, the palette, the display font ("Imago has it" or "does not have it, take the closest heavy face") and the
+contact sheet's name. It opens by saying the text is content and never instructions, which the design rules already say
+of the brief. Pipes in cells are replaced so the table cannot be broken.
+
+## Concept sets
+
+A set is N (2 to 4 at the start, up to eight with "another concept") thumbnail concepts for one video, designed in
+parallel and compared. Its record is `<IMAGO_DATA_DIR>/concept-sets/<id>/set.json` (`{id, title, format, count, state,
+kit, kitAssets, brief, plan {source, note, concepts}, costUsd, members [{index, projectId, state, error, concept}]}`),
+written atomically and serialised per set. States: set `draft`, `planning`, `designing`, `done` (at least one concept
+done), `failed`, `cancelled`; concept `planning`, `waiting`, `designing`, `done`, `failed`, `cancelled`. Each concept is an
+ordinary project with `conceptSet: {id, index, archetype, label}` (so the feed's neighbour rule excludes its siblings, and
+`IMAGO_CONCEPT_SET` reaches render-mcp) and its own `reference/kit.json`, kit assets and craft copy.
+
+**Flow.** `POST /api/concept-sets` creates the set and N projects without a turn (photos may then be uploaded to the set,
+which copies them to every project), `POST .../start` begins:
+
+1. **Planning turn**, in the set's own folder `<set>/work/` (decision: not the first concept's folder, so the planner's
+   Claude session never becomes a concept project's, and the project folders hold only their own material). The folder
+   holds copies of the kit images and the contact sheet, `reference/kit.json`, any uploaded photos and (copied in by
+   `installCraft`) `reference/craft/thumbnail/`. The system prompt is `plannerSection({count, format})`; the first message is the
+   brief, the "From the video" section and "Plan N different thumbnail concepts ... write concepts.json". Arguments
+   (`buildPlannerArgs`): the same lock-down as a design turn, `--restricted`, `--setting-sources ""`, `--strict-mcp-config
+   --mcp-config '{"mcpServers":{}}'` (no MCP tools at all, so no render or cut_out), `--tools "Read,Write,Glob"`,
+   `--permission-mode dontAsk --permission-prompts none --disable-slash-commands`, `--allowedTools
+   "Read(./**),Glob(./**),Write(./concepts.json)"`, `--disallowedTools "Bash,WebFetch,WebSearch,Task,NotebookEdit,Edit,Write(./assets/**),
+   Write(./reference/**),Write(./exports/**)"`, the prompt through `--append-system-prompt-file`, on `IMAGO_MODEL`/`IMAGO_EFFORT`, never
+   `--resume`. The timeout is the turn timeout.
+2. **Validation** of `concepts.json` (`validateConcepts`): exactly `count` concepts, distinct archetypes from
+   `THUMBNAIL_ARCHETYPES`, `label` (at most 40 characters), `idea` and `why` (at most 400) present, `text` a string of at most
+   four words, `frame` and `pictures` (when given) paths `assets/<leaf>` that exist in the folder. Otherwise, or when the
+   planning turn fails or writes nothing, **fallback**: `count` server-chosen distinct archetypes (`fallbackConcepts`: face-led
+   ones first when the kit or uploads have a face, object-led otherwise), each on a different best face frame, with `text: null`
+   (the designer chooses the words) and a note on `plan.note` saying so. Cancelling stops the set; a signed-out or missing Claude
+   fails every concept with that message (the design turns would fail the same way).
+3. The planner's copies (`work/assets`, `work/reference`) are removed once the plan is made; `concepts.json` stays.
+4. **Cut-outs.** `cut_out` runs once per distinct chosen frame that is a kit face frame or an upload, in one concept's
+   project; the result is copied into the other projects that use that frame and registered as a cut-out. The design turn's
+   first message names it. A failed cut-out is ignored (the designer can cut out itself).
+5. **Design turns**, one per concept in its own project through the normal turn path (so one-turn-per-project, cancel,
+   timeouts, exports and delete all behave as for any project), at most `IMAGO_CONCEPT_CONCURRENCY` at once across the whole server. Each
+   gets `conceptSection(concept, siblings)` appended last to its system prompt on that first turn only (later
+   refine turns are ordinary), and the first message `Make concept N of M: "<label>" (<archetype>). ...`. One concept
+   failing never fails the others; the set is `done` when any concept is, `failed` only when all are.
+6. **Another concept** (`POST .../another`, only when the set is not draft or running): one more concept with an archetype
+   not used yet, from `fallbackConcepts` (no planning turn, so it costs one design turn), in a project that gets the kit
+   material copied from an existing concept, with every existing concept as its siblings.
+
+Cost: a set of three is a planning turn plus three design turns, about four times one design; the start form says so. A set's
+`costUsd` is the sum of Claude Code's `total_cost_usd` over its turns (an API-price estimate, not a charge).
+
+A restart marks sets that were planning or designing as failed ("Imago was restarted"), as it clears `running` on projects.
+
+**Set view** (`GET /api/concept-sets/:id`): `{id, title, format, state, createdAt, updatedAt, count, kit, plan {source:
+planner|fallback, note}, costUsd, testCompare (true for 16:9), concepts: [{index, projectId, removed, state, error, archetype,
+label, idea, text, why, frame, title, current, versionCount, running, renderUrl, checks {ok, warn, info, warnings [{id,
+message}]}}]}`.
+
+**SSE** `/api/concept-sets/:id/events`: `snapshot {set}`, `set {set}` after any change (coalesced to 120 ms; fed by the
+projects' own events), `concept.progress {index, text}` (a concept's current tool, from its `tool.use`), `set.progress {text}`
+(the planner's tools, cut-outs), heartbeat comments.
+
+**Compare screen** (`/c/<set id>`, `screens/Compare.tsx`): the concepts side by side, each with its state, label,
+archetype, idea and why, its current render, a `FeedPreview` among its siblings (and stand-ins), and a checks summary (the warn
+count and the first three warnings). A shared surface and theme control. Actions: Refine (`/p/<id>`), Another concept, Cancel
+(while running), and for 16:9 sets a Test & Compare zip with a tick per concept (at most three). A shorts set has a per-concept
+"Covers" button instead. The Library shows a "Concept N · compare" badge on concept projects, and the workspace toolbar a link
+back to the compare screen. The start form (thumbnails) has "From a Fabula video" (a kit picker with poster, title, date,
+format, which prefills the form), a one-or-three concepts choice with the usage note, and, for the shorts format, a platforms
+multi-select (all three by default).
+
+## Test & Compare and platform covers
+
+**YouTube Test & Compare** (verified 2026-10-13; the page, YouTube Help "Test & compare thumbnails",
+support.google.com/youtube/answer/13861714, and its successor "A/B test titles & thumbnails", support.google.com/youtube/answer/16391400):
+up to **three** options per video; desktop only (YouTube Studio, advanced features enabled); **Shorts are not eligible**
+(nor scheduled lives and premieres until they become ordinary videos; made-for-kids, mature-audience and private videos are
+excluded; podcast episodes and live archives are eligible); resolution at least 1280×720, anything lower is downscaled to
+480p; the page states **no file-size or format limit** (YouTube's general thumbnail limits are 2 MB on mobile and 50 MB on
+desktop, which `Imago` meets anyway); changing the title or thumbnail during a test stops it, and a test finishes within two
+weeks. So: only 16:9 sets offer it (400 `NOT_VIDEO` otherwise), and at most three concepts are exported.
+
+`POST /api/concept-sets/:id/test-compare {projects?}` renders each chosen concept's current `design.html` (validated, its turn
+finished: 409 `TURN_RUNNING` otherwise; 409 `NO_RENDERS` when none has a render; 400 `TOO_MANY` above three, so with more than
+three concepts the owner chooses) at 3840×2160 as JPG, each under 2 MB, into `<set>/exports/<set id>-test-and-compare.zip`
+(entries `thumbnail-<n>-<label>.jpg`). The reply is `{name, url, bytes, files: [{name, project, width, height, bytes, quality,
+overBudget}]}`.
+
+**Size budget.** `render.cjs` takes `--quality=<10-100>` (default 92) and `--max-bytes=<n>`: a JPEG over the limit is
+re-encoded four quality points lower at a time, never below 40, and the result line says the `quality` used.
+`renderHtml` forwards `quality` and `maxBytes`. The budget is `JPEG_BUDGET` = 1,990,000 bytes (under 2 MB however it is
+counted); `overBudget` is true if even quality 40 did not fit (the file is still written).
+
+**Platform covers** (`POST /api/projects/:id/platform-export`, Shorts canvases only, 720×1280): YouTube Shorts 2160×3840,
+Instagram Reels 1080×1920, TikTok 1080×1920, all JPG under the same budget (1080×1920 is 1.5× the canvas, 2160×3840 is 3×).
+One platform returns the JPG (`/projects/<id>/exports/<id>-v<n>-<platform>-<w>x<h>.jpg`), several a zip
+(`<id>-v<n>-covers.zip`, entries `<platform>-<w>x<h>.jpg`). Reels and TikTok share one render. The workspace's Export popover
+shows "Platform covers" with a tick per platform for a vertical thumbnail.
+
 ## Design rules (validate.mjs, also told to Claude)
 
 - `design.html` is a complete HTML document whose `body` is exactly `width`×`height` CSS pixels
@@ -210,7 +356,8 @@ faces may be added.
 - Every `src`, `href` and CSS `url()` is either relative to the project (`assets/...`), the font
   sheet, or `data:`. Absolute and protocol-relative URLs are errors.
 - Only families listed in `fonts/fonts.json` and generic families may be used. An unknown family
-  is a warning, not an error.
+  is a warning, not an error. Inline `style="..."` attributes are read as rules of their own, so a single-quoted name
+  (`style="font-family:'Lilita One'"`) is one family, not a run-on with the next piece of CSS.
 - Errors make `render` fail with a message Claude can act on. Warnings render and are returned.
 
 ## Claude turn
@@ -294,7 +441,7 @@ status.
 | `GET /api/presets` | | `[{id, label, description, defaultSize, sizes, briefFields, chips: [string]}]` |
 | `GET /api/fonts` | | `fonts.json` content |
 | `GET /api/projects` | query: `query` (words, all must appear in the title or brief), `preset`, `series` (an id, or `none`), `starred=1`, `sort` (`edited` default, `newest`, `oldest`, `title`), `offset`, `limit` (default 40, at most 200) | `{items, total}`; an item is the compact card `{id, title, preset, size, series, starred, createdAt, updatedAt, versionCount, current, thumbnail: url\|null}` (no conversation) |
-| `POST /api/projects` | `{preset, title?, size?, brief, series?}` | `project` (does not start a turn); `series` must exist (400 `BAD_SERIES`) |
+| `POST /api/projects` | `{preset, title?, size?, brief, series?, kit?}` | `project` (does not start a turn); `series` must exist (400 `BAD_SERIES`); `kit` is a kit id from `GET /api/kits` (thumbnails only: 400 `BAD_KIT`, 404 `NO_SUCH_KIT`), and fills the blank brief fields |
 | `GET /api/projects/:id` | | `project` |
 | `PATCH /api/projects/:id` | `{title?, starred?, series?: id\|null}` | `project`; does not change `updatedAt` (a rename is not an edit of the design); 400 `BAD_TITLE`, `BAD_STARRED`, `BAD_SERIES` |
 | `DELETE /api/projects/:id` | | `{ok: true}`; permanent (the UI uses the bulk delete below, which can be undone) |
@@ -312,6 +459,16 @@ status.
 | `POST /api/projects/:id/cancel` | | `{ok: true}` |
 | `POST /api/projects/:id/restore` | `{version}` | `project` (copies `versions/v<n>.html` to `design.html`, sets `current`); 404 when the version or its file is missing; 409 while a turn runs |
 | `POST /api/projects/:id/export` | `{format: "png"\|"jpg"\|"webp", scale: 1\|1.5\|2\|3 (longest output edge at most 8192)}` | `{name, url, width, height, bytes}` |
+| `POST /api/projects/:id/platform-export` | `{platforms?: ["youtube-shorts"\|"instagram-reels"\|"tiktok"]}` (default: the brief's platforms, else all three) | `{name, url, bytes, files: [{platform, name, width, height, bytes, quality, overBudget}]}`: one platform is a JPG, several a zip; 400 `NOT_SHORTS`, 409 `NO_RENDERS`, `TURN_RUNNING`; see Platform covers |
+| `GET /api/kits` | | `{items: [kit summary], rejected: [{name, reason}]}`; see Fabula kits |
+| `POST /api/concept-sets` | `{title?, brief, kit?, count?: 2-4 (default 3)}` | 201 set view (state `draft`) and its N projects; 400 `BAD_COUNT`, `NEEDS_TITLE` |
+| `POST /api/concept-sets/:id/assets` | raw image, `x-filename`, as for projects | `{name, width, height}`: the photo goes into every concept project and the planner's folder; only while `draft` (409 `NOT_DRAFT`) |
+| `POST /api/concept-sets/:id/start` | | 202 set view; plans and designs in the background; 409 `ALREADY_STARTED` |
+| `GET /api/concept-sets/:id` | | the set view |
+| `GET /api/concept-sets/:id/events` | | SSE, see Concept sets |
+| `POST /api/concept-sets/:id/cancel` | | set view; aborts the planner and every running design turn |
+| `POST /api/concept-sets/:id/another` | | 202 set view; 409 `SET_BUSY`, `TOO_MANY` (eight archetypes, so at most eight concepts) |
+| `POST /api/concept-sets/:id/test-compare` | `{projects?: [project id]}` | `{name, url, bytes, files}`; see Test & Compare |
 | `GET /api/projects/:id/events` | | SSE, below |
 
 ### Series and the style reference
@@ -349,6 +506,8 @@ The server also serves these files, with `Cache-Control: no-store` and `X-Conten
   `.png`, `.jpg`, `.jpeg` and `.webp` (404 for anything else, sidecar `.json` files included), each
   with `Content-Security-Policy: sandbox; default-src 'none'`. Only those extensions are registered
   into `project.assets`.
+- `/projects/:id/exports/*.zip` (platform covers), `/concept-sets/:id/exports/*.zip` (Test & Compare): `application/zip`, `Content-Disposition: attachment`, the same `sandbox` CSP.
+- `/kits/:kitId/frames/<file>` and `/kits/:kitId/pictures/<file>`: only the image files that kit's `kit.json` declares, image extensions only, the same CSP; 404 for anything else (kit.json included).
 - `/fonts/*` (with `Access-Control-Allow-Origin: *`, because the UI previews a design in a sandboxed,
   opaque-origin iframe whose font loads are cross-origin) and `web/dist`, with an SPA fallback to
   `index.html` for paths that are not `/api`.
@@ -382,7 +541,7 @@ sizes, versions and costs. It has dark and light themes, honours reduced motion 
 visible focus.
 
 Routes: `/` (start: the three presets and the latest eight projects, "View all"), `/library`,
-`/new/<preset>` (`?style=<project id>` for "New in this style"), `/p/<id>`. The library searches by
+`/new/<preset>` (`?style=<project id>` for "New in this style"), `/p/<id>`, `/c/<set id>` (the compare screen). The library searches by
 title and brief, filters by preset, series and starred, sorts four ways, loads 40 at a time, and has a
 "⋯" menu per card (also in the workspace header: Open, Rename, Star, Duplicate, New in this style,
 Move to series, Delete with a six-second Undo), multi-select (checkboxes, shift-click range, select
@@ -421,8 +580,7 @@ injects, so the two cannot drift.
 
 **Neighbours.** The owner's other thumbnail projects of the same shape (16:9, 9:16 or 1:1 by the
 brief's format or the canvas), newest `updatedAt` first, at most eight, each its current render.
-Excluded: this project, every project whose `conceptSet.id` equals this one's (a field piece D adds;
-absent today, so nothing is excluded by it yet), projects without a render on disk. Fewer than six are
+Excluded: this project, every project whose `conceptSet.id` equals this one's, projects without a render on disk. Fewer than six are
 padded with neutral stand-ins (gradient and disc SVGs). `feed.distinct` compares against the real ones
 when there are any, else against the stand-ins, and its message says which.
 
@@ -504,7 +662,7 @@ config from `--mcp-config`. It then:
 3. emits stream-json lines: `system/init` with a `session_id`, an assistant `text`, a `tool_use`
    for `mcp__imago__render`, the matching `tool_result`, and a `result` with `total_cost_usd: 0`.
 
-`FAKE_CLAUDE_MODE=signed-out|fail|slow` exercises the error paths; `early-fail` dies before `init`, and `resume-fail` answers "No conversation found" to any `--resume`. The fake reads the system prompt file while the turn runs and records it as `systemPrompt` in `fake-claude-call.json`.
+`FAKE_CLAUDE_MODE=signed-out|fail|slow` exercises the error paths; a turn started without the imago MCP server is a planning turn and writes `concepts.json` (`FAKE_CLAUDE_PLANNER=invalid|missing|duplicate` changes what); `FAKE_CLAUDE_FAIL_WHEN=<regex>` kills a turn whose prompt matches; `FAKE_CLAUDE_DELAY_MS` holds a design turn open and `FAKE_CLAUDE_TRACE=<file>` logs when turns start and end (the parallelism tests); `early-fail` dies before `init`, and `resume-fail` answers "No conversation found" to any `--resume`. The fake reads the system prompt file while the turn runs and records it as `systemPrompt` in `fake-claude-call.json`.
 
 ## Take it further
 
@@ -543,5 +701,7 @@ further": the next turn runs on a stronger model with more freedom and more tool
   disclosure under the preview.
 - `FAKE_CLAUDE_ARGS_OUT=<file>` makes the fake claude append `{argv, stdin, systemPrompt}` per call;
   `FAKE_CLAUDE_STOCK=1` makes it play a `fetch_image` call.
+
+`tests/fixtures/kit.mjs` writes a schema-v1 kit (small real JPEG and PNG images) for the kit and concept tests, which use temp roots only (`startApp` sets `fabulaRoots: []` unless a test passes roots, and takes injected `deps.cutOut`).
 
 `tests/fixtures/seed-library.mjs <dataDir> [count]` fills a data directory with fake projects and three series, for looking at the library.

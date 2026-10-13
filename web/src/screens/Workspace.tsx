@@ -9,7 +9,8 @@ import { RenameInput } from "./Library.js";
 import { FeedView } from "./FeedView.js";
 import { Credits, FurtherBar, ModelBadge } from "../further.js";
 import { creditLine } from "../further-lib.js";
-import { errorText, fmtSize, navigate, runErrorText } from "../lib.js";
+import { download, errorText, fmtSize, mb, navigate, runErrorText } from "../lib.js";
+import { PLATFORM_LABELS, type PlatformId } from "../api/types.js";
 import { EXPORT_FORMATS, EXPORT_SCALES, YOUTUBE_MOBILE_MAX_BYTES, allowedScales, presetUi } from "../presets.js";
 
 interface LiveItem {
@@ -204,6 +205,11 @@ function Toolbar({ project, run, onProject }: { project: Project; run: Run; onPr
           {fmtSize(project.size)}{project.current ? ` · v${project.current}` : ""}
         </span>
         {seriesName && <span className="series-chip static">{seriesName}</span>}
+        {project.conceptSet && (
+          <a className="series-chip set-chip" href={`/c/${project.conceptSet.id}`} onClick={(e) => { e.preventDefault(); navigate(`/c/${project.conceptSet!.id}`); }}>
+            Concept {project.conceptSet.index + 1}{project.conceptSet.label ? ` · ${project.conceptSet.label}` : ""} · compare
+          </a>
+        )}
       </div>
       <div className="toolbar-actions">
         <button type="button" className={`icon-btn star-btn ${project.starred ? "on" : ""}`} aria-pressed={project.starred === true} aria-label={project.starred ? "Remove star" : "Star this design"} onClick={() => void patch({ starred: !project.starred })}>
@@ -297,6 +303,7 @@ function VersionStrip({ project, disabled, onRestore }: { project: Project; disa
 function ExportMenu({ project, disabled }: { project: Project; disabled: boolean }) {
   const [open, setOpen] = useState(false);
   const thumb = project.preset === "thumbnail";
+  const vertical = thumb && project.size.width === 720 && project.size.height === 1280;
   // Thumbnails default to YouTube's recommended 4K JPG; everything else to 1x PNG.
   const [format, setFormat] = useState<ExportFormat>(thumb ? "jpg" : "png");
   const [wanted, setScale] = useState<number>(thumb ? 3 : 1);
@@ -365,8 +372,42 @@ function ExportMenu({ project, disabled }: { project: Project; disabled: boolean
           <Btn variant="primary" icon="export" disabled={state.busy} onClick={go}>{state.busy ? "Exporting…" : "Download"}</Btn>
           {state.note && <p className={`small ${state.bad ? "field-error" : "muted mono"}`} role="status">{state.note}</p>}
           {state.warn && <p className="small field-error" role="status">{state.warn}</p>}
+          {vertical && <Covers project={project} />}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Vertical covers per platform: YouTube Shorts 2160×3840, Reels and TikTok 1080×1920, each a JPG under 2 MB. */
+function Covers({ project }: { project: Project }) {
+  const listed = (project.brief as unknown as { platforms?: PlatformId[] }).platforms;
+  const all = Object.keys(PLATFORM_LABELS) as PlatformId[];
+  const [picked, setPicked] = useState<PlatformId[]>(listed?.length ? listed : all);
+  const [state, setState] = useState({ busy: false, note: "", bad: false });
+  async function go() {
+    setState({ busy: true, note: "", bad: false });
+    try {
+      const r = await api.platformExport(project.id, picked);
+      download(r.url, r.name);
+      setState({ busy: false, note: `${r.name} · ${r.files.map((f) => `${f.width}×${f.height} ${mb(f.bytes)}`).join(", ")}`, bad: r.files.some((f) => f.overBudget) });
+    } catch (e) {
+      setState({ busy: false, note: errorText(e), bad: true });
+    }
+  }
+  return (
+    <div className="covers">
+      <span className="label">Platform covers <em>JPG under 2 MB</em></span>
+      <div className="platforms">
+        {all.map((pid) => (
+          <label key={pid} className="small">
+            <input type="checkbox" checked={picked.includes(pid)} onChange={(e) => setPicked(e.target.checked ? all.filter((x) => x === pid || picked.includes(x)) : picked.filter((x) => x !== pid))} />
+            {PLATFORM_LABELS[pid]} <span className="mono muted">{pid === "youtube-shorts" ? "2160×3840" : "1080×1920"}</span>
+          </label>
+        ))}
+      </div>
+      <Btn icon="export" disabled={state.busy || picked.length === 0} onClick={go}>{state.busy ? "Exporting…" : picked.length > 1 ? "Download covers (zip)" : "Download cover"}</Btn>
+      {state.note && <p className={`small ${state.bad ? "field-error" : "muted mono"}`} role="status">{state.note}</p>}
     </div>
   );
 }

@@ -175,8 +175,8 @@ export function buildSystemPrompt(project, fontFamilies = []) {
   ].join("\n\n");
 }
 
-/** The first turn's prompt: the brief, then what the user typed. */
-export function buildFirstPrompt(project, userText) {
+/** The first turn's prompt: the brief, the "From the video" section when there is a kit, then what the user typed. */
+export function buildFirstPrompt(project, userText, kitText = "") {
   const preset = presetById(project.preset);
   const lines = [];
   for (const field of preset?.briefFields ?? []) {
@@ -186,7 +186,7 @@ export function buildFirstPrompt(project, userText) {
   }
   if (project.preset === "photo" && project.brief?.aspect && project.brief.aspect !== "original") lines.push(`Aspect ratio: ${project.brief.aspect}`);
   const brief = lines.length ? `Brief:\n${lines.join("\n")}\n\n` : "";
-  return `${brief}${userText}`.trim();
+  return `${brief}${kitText ? `${kitText}\n\n` : ""}${userText}`.trim();
 }
 
 const craftRoot = path.join(here, "craft");
@@ -210,7 +210,7 @@ const FORMAT_WORDS = { video: "video thumbnail, 16:9 (1280x720)", shorts: "verti
 
 /** A concept as plain lines, for the `{{concept}}` and `{{siblings}}` placeholders. */
 export function describeConcept(c) {
-  const lines = [`- Archetype: ${c.archetype}`, `- Label: ${c.label}`, `- Idea: ${c.idea}`, `- Text on the image: ${c.text ? `"${c.text}"` : "(none)"}`];
+  const lines = [`- Archetype: ${c.archetype}`, `- Label: ${c.label}`, `- Idea: ${c.idea}`, `- Text on the image: ${c.text ? `"${c.text}"` : c.text === null || c.text === undefined ? "(your choice: 1-4 words that do not restate the title)" : "(none)"}`];
   if (c.frame) lines.push(`- Main picture: ${c.frame}`);
   if (c.pictures?.length) lines.push(`- Other pictures: ${c.pictures.join(", ")}`);
   if (c.why) lines.push(`- Why: ${c.why}`);

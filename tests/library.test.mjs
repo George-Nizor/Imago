@@ -74,7 +74,7 @@ test("list: filter, search, sort and paginate compact summaries", async () => {
     assert.equal(all.total, 13);
     assert.equal(all.items[0].id, ids[0]); // edited sort: i=1 has the newest updatedAt
     // Summaries are compact: no conversation, no search text.
-    assert.deepEqual(Object.keys(all.items[0]).sort(), ["createdAt", "current", "id", "preset", "series", "size", "starred", "thumbnail", "title", "updatedAt", "versionCount"]);
+    assert.deepEqual(Object.keys(all.items[0]).sort(), ["conceptSet", "createdAt", "current", "id", "preset", "series", "size", "starred", "thumbnail", "title", "updatedAt", "versionCount"]);
     assert.equal(all.items[0].thumbnail, `/projects/${ids[0]}/renders/v1.png`);
     assert.equal(all.items[0].versionCount, 1);
     assert.equal(all.items.find((p) => p.id === ids[4]).thumbnail, null);

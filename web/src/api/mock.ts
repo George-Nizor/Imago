@@ -7,7 +7,14 @@ import type {
   AssetInfo,
   Capabilities,
   Check,
+  ConceptSetView,
+  ConceptView,
   CreateBody,
+  CreateSetBody,
+  KitSummary,
+  PlatformId,
+  SetEvent,
+  ZipExport,
   PresetInfo,
   Project,
   ProjectSummary,
@@ -226,7 +233,182 @@ const need = (id: string) => {
   return p;
 };
 
+// ---- Fabula kits and concept sets ----
+const kitPoster = (title: string, hue: number) => placeholder({ width: 1280, height: 720 }, title, 1, hue);
+const KITS: KitSummary[] = [
+  {
+    id: "mockkit00000001", title: "We released the game", project: "early-access", format: "landscape", thumbnailFormat: "video",
+    createdAt: "2026-10-13T12:00:00.000Z", durationSeconds: 611, logline: "A studio ships its first game and shows the launch week.",
+    counts: { face: 8, screen: 3, pictures: 4, hooks: 5, chapters: 6 }, poster: kitPoster("We released the game", 5),
+    suggested: { title: "We released the game", channelColours: "accent #E8413C, accent2 #43D35B, text #F4F0E6", notes: "A studio ships its first game and shows the launch week.", format: "video" },
+  },
+  {
+    id: "mockkit00000002", title: "Three tips for sleep", project: "sleep-short", format: "vertical", thumbnailFormat: "shorts",
+    createdAt: "2026-09-20T09:00:00.000Z", durationSeconds: 48, logline: "Three small habits that fix a broken sleep schedule.",
+    counts: { face: 5, screen: 0, pictures: 1, hooks: 3, chapters: 0 }, poster: kitPoster("Three tips for sleep", 215),
+    suggested: { title: "Three tips for sleep", channelColours: "accent #5E9EFD", notes: "Three small habits that fix a broken sleep schedule.", format: "shorts" },
+  },
+];
+const ARCHETYPES: [string, string, string, string][] = [
+  ["reaction", "Shocked first look", "The strongest expression, big, with a word that teases the cause.", "People click to find out what caused the face, and the video answers it."],
+  ["result-reveal", "The number on screen", "The result the video shows, large, with the subject beside it.", "It promises the payoff the video delivers in its second minute."],
+  ["curiosity-gap", "Pointing at the gap", "The subject points at something the picture withholds.", "A question the viewer wants closed, kept honest by the video."],
+  ["object-hero", "The one object", "The object the video is about, large and clean.", "Clear at 168 px and true to what the video shows."],
+];
+interface MockSet { view: ConceptSetView; draftFiles: number }
+const sets = new Map<string, MockSet>();
+const setListeners = new Map<string, Set<(e: SetEvent) => void>>();
+const pushSet = (id: string) => {
+  const m = sets.get(id);
+  if (!m) return;
+  const v = m.view;
+  for (const c of v.concepts) {
+    const p = projects.get(c.projectId);
+    if (!p) continue;
+    c.current = p.current ?? 0;
+    c.versionCount = p.versions.length;
+    c.renderUrl = p.current ? p.renders[p.current]! : null;
+    c.running = p.running;
+    const checks = p.versions.find((x) => x.n === p.current)?.checks ?? [];
+    c.checks = { ok: checks.filter((k) => k.level === "ok").length, warn: checks.filter((k) => k.level === "warn").length, info: checks.filter((k) => k.level === "info").length, warnings: checks.filter((k) => k.level === "warn").map((k) => ({ id: k.id, message: k.message })) };
+  }
+  const states = v.concepts.map((c) => c.state);
+  if (v.state !== "draft") v.state = states.includes("planning") ? "planning" : states.some((s) => s === "waiting" || s === "designing") ? "designing" : states.includes("done") ? "done" : states.every((s) => s === "cancelled") ? "cancelled" : "failed";
+  v.updatedAt = new Date().toISOString();
+  for (const fn of setListeners.get(id) ?? []) fn({ type: "set", set: structuredClone(v) });
+};
+const setCancelled = new Set<string>();
+async function designConcept(setId: string, c: ConceptView, delay: number) {
+  const m = sets.get(setId)!;
+  await wait(delay);
+  if (setCancelled.has(setId)) {
+    c.state = "cancelled";
+    return pushSet(setId);
+  }
+  c.state = "designing";
+  pushSet(setId);
+  const p = projects.get(c.projectId)!;
+  const text = `Make concept ${c.index + 1}`;
+  p.messages.push({ role: "user", text, at: new Date().toISOString(), version: null });
+  p.title = `${m.view.title} · ${c.label}`;
+  p.running = true;
+  await runTurn(p, text);
+  c.state = setCancelled.has(setId) ? "cancelled" : "done";
+  pushSet(setId);
+}
+async function driveSet(id: string) {
+  const m = sets.get(id)!;
+  m.view.state = "planning";
+  for (const c of m.view.concepts) c.state = "planning";
+  pushSet(id);
+  await wait(2200);
+  if (setCancelled.has(id)) {
+    for (const c of m.view.concepts) c.state = "cancelled";
+    return pushSet(id);
+  }
+  m.view.plan = { source: "planner", note: "" };
+  m.view.concepts.forEach((c, i) => {
+    const [archetype, label, idea, why] = ARCHETYPES[i % ARCHETYPES.length]!;
+    Object.assign(c, { archetype, label, idea, why, text: ["WE DID IT", "SEE WHY", "10,000"][i % 3], state: "waiting" as const });
+  });
+  pushSet(id);
+  await Promise.all(m.view.concepts.map((c, i) => designConcept(id, c, i * 500)));
+}
+const kitOf = (id: string | undefined) => KITS.find((k) => k.id === id);
+
 export const mockApi: Api = {
+  async listKits() {
+    await wait(150);
+    return { items: structuredClone(KITS), rejected: [] };
+  },
+  async createConceptSet(body: CreateSetBody) {
+    const kit = kitOf(body.kit);
+    const brief: Record<string, string | string[]> = { ...body.brief, ...(kit ? { title: String(body.brief.title || kit.suggested.title) } : {}) };
+    const title = body.title || String(brief.title || "Thumbnails");
+    const id = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}-${(++counter).toString(36)}s`;
+    const format = (String(brief.format ?? kit?.suggested.format ?? "video")) as ConceptSetView["format"];
+    const concepts: ConceptView[] = [];
+    for (let i = 0; i < body.count; i++) {
+      const made = await this.createProject({ preset: "thumbnail", title: `${title} · concept ${i + 1}`, brief: { ...brief, format } });
+      const p = projects.get(made.id)!;
+      p.conceptSet = { id, index: i, archetype: null, label: null };
+      concepts.push({ index: i, projectId: made.id, removed: false, state: "planning", error: null, archetype: null, label: null, idea: null, text: null, why: null, frame: null, title: p.title, current: 0, versionCount: 0, running: false, renderUrl: null, checks: { ok: 0, warn: 0, info: 0, warnings: [] }, progress: null });
+    }
+    const now = new Date().toISOString();
+    const view: ConceptSetView = { id, title, format, state: "draft", createdAt: now, updatedAt: now, count: body.count, kit: kit ? { id: kit.id, title: kit.title } : null, plan: { source: null, note: "" }, costUsd: 0, testCompare: format === "video", concepts };
+    sets.set(id, { view, draftFiles: 0 });
+    return structuredClone(view);
+  },
+  async uploadSetAsset(id, file) {
+    sets.get(id)!.draftFiles += 1;
+    await wait(300);
+    return { name: file.name, width: 800, height: 800 };
+  },
+  async startConceptSet(id) {
+    const m = sets.get(id);
+    if (!m) throw new ApiError("NOT_FOUND", "No such concept set.", 404);
+    setCancelled.delete(id);
+    void driveSet(id);
+    return structuredClone(m.view);
+  },
+  async getConceptSet(id) {
+    const m = sets.get(id);
+    if (!m) throw new ApiError("NOT_FOUND", "No such concept set.", 404);
+    pushSet(id);
+    return structuredClone(m.view);
+  },
+  async cancelConceptSet(id) {
+    setCancelled.add(id);
+    for (const c of sets.get(id)!.view.concepts) {
+      cancelled.add(c.projectId);
+      if (c.state === "waiting" || c.state === "planning") c.state = "cancelled";
+    }
+    pushSet(id);
+    return structuredClone(sets.get(id)!.view);
+  },
+  async anotherConcept(id) {
+    const m = sets.get(id)!;
+    const used = m.view.concepts.map((c) => c.archetype);
+    const [archetype, label, idea, why] = ARCHETYPES.find((a) => !used.includes(a[0])) ?? ARCHETYPES[3]!;
+    const made = await this.createProject({ preset: "thumbnail", title: `${m.view.title} · ${label}`, brief: { title: m.view.title, format: m.view.format } });
+    const p = projects.get(made.id)!;
+    const index = m.view.concepts.length;
+    p.conceptSet = { id, index, archetype, label };
+    const c: ConceptView = { index, projectId: made.id, removed: false, state: "waiting", error: null, archetype, label, idea, text: null, why, frame: null, title: p.title, current: 0, versionCount: 0, running: false, renderUrl: null, checks: { ok: 0, warn: 0, info: 0, warnings: [] }, progress: null };
+    m.view.concepts.push(c);
+    m.view.count = m.view.concepts.length;
+    setCancelled.delete(id);
+    pushSet(id);
+    void designConcept(id, c, 0);
+    return structuredClone(m.view);
+  },
+  subscribeSet(id, onEvent) {
+    let set = setListeners.get(id);
+    if (!set) setListeners.set(id, (set = new Set()));
+    set.add(onEvent);
+    const t = setTimeout(() => {
+      const m = sets.get(id);
+      if (m) onEvent({ type: "snapshot", set: structuredClone(m.view) });
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      set!.delete(onEvent);
+    };
+  },
+  async testCompare(id, ids) {
+    await wait(900);
+    const m = sets.get(id)!;
+    const chosen = m.view.concepts.filter((c) => c.renderUrl && (!ids || ids.includes(c.projectId))).slice(0, 3);
+    const files = chosen.map((c, n) => ({ name: `thumbnail-${n + 1}.jpg`, width: 3840, height: 2160, bytes: 1_400_000 + n * 90_000, quality: 88, overBudget: false, project: c.projectId }));
+    return { name: `${id}-test-and-compare.zip`, url: URL.createObjectURL(new Blob(["mock zip"], { type: "application/zip" })), bytes: files.reduce((a, f) => a + f.bytes, 0), files } satisfies ZipExport;
+  },
+  async platformExport(id, platforms) {
+    await wait(700);
+    const all: PlatformId[] = platforms?.length ? platforms : ["youtube-shorts", "instagram-reels", "tiktok"];
+    const files = all.map((platform) => ({ platform, name: `${id}-${platform}.jpg`, width: platform === "youtube-shorts" ? 2160 : 1080, height: platform === "youtube-shorts" ? 3840 : 1920, bytes: platform === "youtube-shorts" ? 1_700_000 : 600_000, quality: 90, overBudget: false }));
+    return { name: all.length === 1 ? files[0]!.name : `${id}-covers.zip`, url: URL.createObjectURL(new Blob(["mock"], { type: "application/zip" })), bytes: files.reduce((a, f) => a + f.bytes, 0), files };
+  },
+
   capabilities: async () => (await wait(150), structuredClone(caps)),
   presets: async () => PRESETS,
   async listProjects(q = {}) {
@@ -244,7 +426,7 @@ export const mockApi: Api = {
     await wait(120);
     const items = all.slice(q.offset ?? 0, (q.offset ?? 0) + (q.limit ?? 40)).map<ProjectSummary>((p) => ({
       id: p.id, title: p.title, preset: p.preset, size: p.size, series: p.series ?? null, starred: p.starred === true,
-      createdAt: p.createdAt, updatedAt: p.updatedAt, versionCount: p.versions.length, current: p.current ?? 0,
+      createdAt: p.createdAt, updatedAt: p.updatedAt, versionCount: p.versions.length, current: p.current ?? 0, conceptSet: p.conceptSet ?? null,
       thumbnail: p.current ? p.renders[p.current]! : null,
     }));
     return { items, total: all.length };
@@ -331,7 +513,7 @@ export const mockApi: Api = {
     const now = new Date().toISOString();
     const p: MockProject = {
       schemaVersion: 1, id, title: body.title || PRESETS.find((x) => x.id === body.preset)!.label, preset: body.preset,
-      size, createdAt: now, updatedAt: now, sessionId: null, brief: body.brief, assets: [], messages: [],
+      size, createdAt: now, updatedAt: now, sessionId: null, brief: body.brief as Record<string, string>, assets: [], messages: [],
       versions: [], current: null, running: false, renders: {}, sizeAuto, series: body.series ?? null, starred: false,
     };
     projects.set(id, p);

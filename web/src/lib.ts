@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "./api/client.js";
 import type { PresetId, Size } from "./api/types.js";
 
-// ---- routing: four paths, no library ----
-export type Route = { name: "start" } | { name: "library" } | { name: "new"; preset: PresetId; style?: string } | { name: "project"; id: string };
+// ---- routing: five paths, no library ----
+export type Route = { name: "start" } | { name: "library" } | { name: "new"; preset: PresetId; style?: string } | { name: "project"; id: string } | { name: "compare"; id: string };
 
 export function parseRoute(path: string, search = ""): Route {
   const parts = path.split("/").filter(Boolean);
@@ -11,6 +11,7 @@ export function parseRoute(path: string, search = ""): Route {
     return { name: "new", preset: parts[1], style: new URLSearchParams(search).get("style") ?? undefined };
   if (parts[0] === "library" && !parts[1]) return { name: "library" };
   if (parts[0] === "p" && parts[1]) return { name: "project", id: decodeURIComponent(parts[1]) };
+  if (parts[0] === "c" && parts[1]) return { name: "compare", id: decodeURIComponent(parts[1]) };
   return { name: "start" };
 }
 /** Query parameters that belong to the session, not the page, and so survive every navigation. */
@@ -99,3 +100,14 @@ export function shortAgo(iso: string): string {
   const days = (Date.now() - new Date(iso).getTime()) / 86_400_000;
   return days > 30 ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: days > 330 ? "numeric" : undefined }) : ago(iso);
 }
+
+/** Starts a download of `url` in the browser. */
+export function download(url: string, name: string) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+}
+export const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(2)} MB`;

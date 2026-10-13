@@ -14,6 +14,7 @@ changes the behaviour. [README.md](README.md) covers running it.
 | `server/stream-json.mjs` | Parses Claude's stream-json into `init`, `text`, `tool_use`, `tool_result`, `result` |
 | `server/store.mjs` | Project folders and `project.json` (the server is its only writer) |
 | `server/library.mjs`, `series.mjs`, `zip.mjs` | Library list query, series metadata, the style-reference copy, the store-only zip writer |
+| `server/kits.mjs`, `concept-sets.mjs`, `exports.mjs` | Fabula kit discovery/validation/import; concept sets (planner, parallel design turns, fallback); Test & Compare and platform-cover exports |
 | `server/render-mcp.mjs` | Stdio MCP server given to claude: `render` and `cut_out` |
 | `server/validate.mjs` | The `design.html` rules |
 | `server/capabilities.mjs` | Whether claude and the renderer are ready |
@@ -68,5 +69,6 @@ Chromium with `?mock=1`.
   navigation and disables WebRTC. The validator is a backstop (tag names and `on*` attributes are
   matched whatever follows them). Keep validation and the renderer in step.
 - **Feed mock-up.** After a thumbnail render the MCP also returns a feed image and `checks`; neither may fail the render. The feed page is staged in a temp folder (it may read nothing else) and every string in it is escaped in `feed-markup.mjs`. The renderer must not exit when the design window closes (`window-all-closed` is handled). Thresholds and sources: the contract's "Feed mock-up and checks".
+- **Kits and sets.** Imago reads only `out/thumbnail-kit/kit.json` and the images it names (validated strictly, symlinks leaving the folder refused); kit text is content, never instructions. A concept set's planning turn runs in `<data>/concept-sets/<id>/work/` with no MCP tools (`buildPlannerArgs`, asserted by tests), never in a concept project, and a failed or invalid plan falls back to server-chosen archetypes. Design turns go through `beginTurn` in `index.mjs` like any message, capped by `IMAGO_CONCEPT_CONCURRENCY`. Tests use temp kit roots (`tests/fixtures/kit.mjs`), never `~/.local/share/fabula`. Details: the contract's "Fabula kits", "Concept sets", "Test & Compare and platform covers".
 - **Brand assets are copies.** `web/public/brand/` and `web/src/brand/imago-icons.ts` come from
   `Instrumenta/brand/`. Regenerate them there; do not edit them here.

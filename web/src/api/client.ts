@@ -2,6 +2,8 @@ import {
   type Api,
   type CreateBody,
   EVENT_NAMES,
+  SET_EVENT_NAMES,
+  type SetEvent,
   type ExportFormat,
   type ServerEvent,
 } from "./types.js";
@@ -112,4 +114,31 @@ export const realApi: Api = {
   feedUrl: (id, n) => `/projects/${enc(id)}/renders/v${n}-feed.png`,
   designUrl: (id, nonce) => `/projects/${enc(id)}/design.html?t=${nonce}`,
   assetUrl: (id, name) => `/projects/${enc(id)}/assets/${enc(name)}`,
+  listKits: () => call("/api/kits"),
+  createConceptSet: (body) => call("/api/concept-sets", json("POST", body)),
+  uploadSetAsset: (id, file) =>
+    call(`/api/concept-sets/${enc(id)}/assets`, {
+      method: "POST",
+      headers: { "x-filename": filenameHeader(file.name), "content-type": file.type || "application/octet-stream" },
+      body: file,
+    }),
+  startConceptSet: (id) => call(`/api/concept-sets/${enc(id)}/start`, json("POST", {})),
+  getConceptSet: (id) => call(`/api/concept-sets/${enc(id)}`),
+  cancelConceptSet: (id) => call(`/api/concept-sets/${enc(id)}/cancel`, json("POST", {})),
+  anotherConcept: (id) => call(`/api/concept-sets/${enc(id)}/another`, json("POST", {})),
+  subscribeSet(id, onEvent) {
+    const es = new EventSource(`/api/concept-sets/${enc(id)}/events`);
+    for (const type of SET_EVENT_NAMES) {
+      es.addEventListener(type, (ev) => {
+        try {
+          onEvent({ type, ...(JSON.parse((ev as MessageEvent<string>).data) as object) } as SetEvent);
+        } catch {
+          /* ignore a malformed frame */
+        }
+      });
+    }
+    return () => es.close();
+  },
+  testCompare: (id, projects) => call(`/api/concept-sets/${enc(id)}/test-compare`, json("POST", projects ? { projects } : {})),
+  platformExport: (id, platforms) => call(`/api/projects/${enc(id)}/platform-export`, json("POST", platforms ? { platforms } : {})),
 };

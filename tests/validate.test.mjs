@@ -112,3 +112,16 @@ test("harmless look-alikes are not errors", () => {
   assert.deepEqual(check(page({ body })).errors, []);
   assert.deepEqual(check(page({ head: '<link rel="stylesheet" href="/fonts/fonts.css">' })).errors, []);
 });
+
+test("inline styles with single-quoted font names are read as their own family", () => {
+  const page2 = (body) => `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/fonts/fonts.css"><style>body{width:1280px;height:720px;margin:0;overflow:hidden}</style></head><body>${body}</body></html>`;
+  const known = { width: 1280, height: 720, fonts: ["Lilita One", "Anton"] };
+  assert.deepEqual(validateDesign(page2(`<div style="font-family:'Lilita One'">a</div>`), known), { errors: [], warnings: [] });
+  assert.deepEqual(validateDesign(page2(`<div style="font:700 40px 'Lilita One', sans-serif">a</div><p style="font-family:'Anton',sans-serif;color:red">b</p>`), known), { errors: [], warnings: [] });
+  const unknown = validateDesign(page2(`<div style="font-family:'Nope Sans', sans-serif">a</div><span style="color:red">b</span>`), known);
+  assert.deepEqual(unknown.errors, []);
+  assert.deepEqual(unknown.warnings, ['Font family "Nope Sans" is not in fonts.json and will fall back.']);
+  // An inline style on <body> still counts toward its geometry.
+  const inline = `<html><body style="width:1280px;height:720px;margin:0;overflow:hidden"><b style="font-family:'Anton'">x</b></body></html>`;
+  assert.deepEqual(validateDesign(inline, known).errors, []);
+});

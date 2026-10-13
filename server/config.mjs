@@ -4,6 +4,16 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 
+/** Where Fabula keeps projects (comma separated in IMAGO_FABULA_PROJECTS), else its default place and a sibling checkout's media. */
+export function fabulaRoots(env = process.env) {
+  const given = String(env.IMAGO_FABULA_PROJECTS ?? "").split(",").map((r) => r.trim()).filter(Boolean);
+  if (given.length) return given.map((r) => path.resolve(r));
+  const roots = [path.join(homedir(), ".local", "share", "fabula", "projects")];
+  const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "Fabula", "media");
+  if (existsSync(checkout)) roots.push(checkout);
+  return roots;
+}
+
 export const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export function packageVersion() {
@@ -61,6 +71,8 @@ export function loadConfig(env = process.env, overrides = {}) {
     chromiumLibs: env.IMAGO_CHROMIUM_LIBS?.trim() || (existsSync(LOCAL_CHROMIUM_LIBS) ? LOCAL_CHROMIUM_LIBS : ""),
     // Extra browser origins allowed to make changing requests (the Vite dev server); see server/index.mjs.
     allowedOrigins: String(env.IMAGO_ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim().replace(/\/$/, "")).filter((o) => /^https?:\/\/[^/]+$/.test(o)),
+    fabulaRoots: fabulaRoots(env),
+    conceptConcurrency: Math.min(8, Math.floor(num(env.IMAGO_CONCEPT_CONCURRENCY, 3))),
     renderScript: path.join(PACKAGE_ROOT, "render", "render.cjs"),
     mcpScript: path.join(PACKAGE_ROOT, "server", "render-mcp.mjs"),
     ...overrides,

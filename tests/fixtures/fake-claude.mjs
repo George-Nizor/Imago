@@ -47,6 +47,10 @@ if (mode === "signed-out") {
   send({ type: "result", subtype: "success", is_error: true, result: "Invalid API key · Please run /login", session_id: sessionId, total_cost_usd: 0, duration_ms: 5 });
   process.exit(1);
 }
+if (process.env.FAKE_CLAUDE_FAIL_WHEN && new RegExp(process.env.FAKE_CLAUDE_FAIL_WHEN).test(stdin)) {
+  process.stderr.write("this turn was told to fail\n");
+  process.exit(3);
+}
 if (mode === "fail") {
   process.stderr.write("something exploded\n");
   process.exit(3);
@@ -65,6 +69,33 @@ if (fetchedStock) {
 }
 
 const mcp = JSON.parse(flag("--mcp-config").trim().startsWith("{") ? flag("--mcp-config") : fs.readFileSync(flag("--mcp-config"), "utf8")).mcpServers.imago;
+const trace = (event) => process.env.FAKE_CLAUDE_TRACE && fs.appendFileSync(process.env.FAKE_CLAUDE_TRACE, `${JSON.stringify({ event, t: Date.now(), cwd: process.cwd() })}\n`);
+
+if (!mcp) {
+  // The planner: reads nothing, writes concepts.json in its folder.
+  const count = Number(/You plan (\d+) different/.exec(systemPrompt ?? "")?.[1] ?? 3);
+  const assets = fs.existsSync("assets") ? fs.readdirSync("assets") : [];
+  const faces = assets.filter((a) => /^kit-f\d+\./.test(a));
+  const archetypes = ["reaction", "result-reveal", "curiosity-gap", "number", "story-moment", "versus"];
+  const kind = process.env.FAKE_CLAUDE_PLANNER ?? "";
+  const concepts = Array.from({ length: count }, (_, i) => ({
+    archetype: kind === "duplicate" ? "reaction" : archetypes[i % archetypes.length],
+    label: `Concept ${i + 1} label`,
+    idea: `Idea number ${i + 1}.`,
+    text: ["WE DID IT", "NOT ALLOWED", "SEE WHY"][i % 3],
+    ...(faces.length ? { frame: `assets/${faces[i % faces.length]}` } : {}),
+    why: `Reason ${i + 1}.`,
+  }));
+  if (kind === "invalid") concepts[0].archetype = "not-an-archetype";
+  if (kind !== "missing") fs.writeFileSync("concepts.json", JSON.stringify({ concepts }));
+  send({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_p", name: "Write", input: { file_path: `${process.cwd()}/concepts.json`, content: "..." } }] }, session_id: sessionId });
+  send({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_p", content: "File created" }] }, session_id: sessionId });
+  send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Planned the concepts." }] }, session_id: sessionId });
+  send({ type: "result", subtype: "success", is_error: false, result: "Planned.", session_id: sessionId, total_cost_usd: 0.01, duration_ms: 50 });
+  process.exit(0);
+}
+trace("start");
+if (process.env.FAKE_CLAUDE_DELAY_MS) await new Promise((r) => setTimeout(r, Number(process.env.FAKE_CLAUDE_DELAY_MS)));
 const width = Number(mcp.env.IMAGO_WIDTH);
 const height = Number(mcp.env.IMAGO_HEIGHT);
 const asset = fs.existsSync("assets") ? fs.readdirSync("assets").find((f) => /\.(png|jpg|webp)$/.test(f)) : null;
@@ -99,4 +130,5 @@ const rendered = await client.callTool({ name: "render", arguments: {} });
 await client.close();
 send({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_r", is_error: Boolean(rendered.isError), content: rendered.content }] }, session_id: sessionId });
 send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Rendered a first version." }] }, session_id: sessionId });
+trace("end");
 send({ type: "result", subtype: "success", is_error: false, result: "Rendered a first version.", session_id: sessionId, total_cost_usd: 0, duration_ms: 1234 });

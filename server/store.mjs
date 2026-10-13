@@ -167,6 +167,7 @@ export function createStore(projectsDir) {
       size: p.size,
       series: typeof p.series === "string" ? p.series : null,
       starred: p.starred === true,
+      conceptSet: p.conceptSet && typeof p.conceptSet.id === "string" ? { id: p.conceptSet.id, index: p.conceptSet.index ?? 0, archetype: p.conceptSet.archetype ?? null, label: p.conceptSet.label ?? null } : null,
       createdAt: p.createdAt ?? p.updatedAt ?? "",
       updatedAt: p.updatedAt ?? "",
       versionCount: Array.isArray(p.versions) ? p.versions.length : 0,

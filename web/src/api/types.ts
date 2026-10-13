@@ -6,7 +6,7 @@ export interface Size {
 }
 export interface AssetInfo {
   name: string;
-  kind: "upload" | "cutout" | "stock" | "reference";
+  kind: "upload" | "cutout" | "stock" | "reference" | "kit";
   width: number;
   height: number;
   from: string | null;
@@ -66,6 +66,16 @@ export interface Project {
   /** Library fields; absent on projects made before the library existed. */
   series?: string | null;
   starred?: boolean;
+  /** Set when this project is one concept of a set (archetype and label are null until the plan is made). */
+  conceptSet?: ConceptTag | null;
+  /** Set when the project was started from a Fabula kit. */
+  kit?: { id: string; title: string; project: string; createdAt: string; contactSheet: boolean };
+}
+export interface ConceptTag {
+  id: string;
+  index: number;
+  archetype: string | null;
+  label: string | null;
 }
 /** The compact card the list endpoint returns (no conversation, no brief). */
 export interface ProjectSummary {
@@ -80,6 +90,7 @@ export interface ProjectSummary {
   versionCount: number;
   current: number;
   thumbnail: string | null;
+  conceptSet?: ConceptTag | null;
 }
 export type LibrarySort = "edited" | "newest" | "oldest" | "title";
 export interface ListQuery {
@@ -158,6 +169,91 @@ export interface ExportResult {
   credits?: Credit[];
 }
 
+export type KitFormat = "landscape" | "vertical" | "square";
+/** A Fabula thumbnail kit as the list endpoint describes it. */
+export interface KitSummary {
+  id: string;
+  title: string;
+  project: string;
+  format: KitFormat;
+  thumbnailFormat: "video" | "shorts" | "podcast";
+  createdAt: string;
+  durationSeconds: number;
+  logline: string;
+  counts: { face: number; screen: number; pictures: number; hooks: number; chapters: number };
+  poster: string | null;
+  /** What the form starts with; the owner edits it. */
+  suggested: { title: string; channelColours: string; notes: string; format: string };
+}
+export interface KitList {
+  items: KitSummary[];
+  rejected: { name: string; reason: string }[];
+}
+
+export type ConceptState = "planning" | "waiting" | "designing" | "done" | "failed" | "cancelled" | "removed";
+export type SetState = "draft" | "planning" | "designing" | "done" | "failed" | "cancelled";
+export interface ConceptView {
+  index: number;
+  projectId: string;
+  removed: boolean;
+  state: ConceptState;
+  error: string | null;
+  archetype: string | null;
+  label: string | null;
+  idea: string | null;
+  text: string | null;
+  why: string | null;
+  frame: string | null;
+  title: string | null;
+  current: number;
+  versionCount: number;
+  running: boolean;
+  renderUrl: string | null;
+  checks: { ok: number; warn: number; info: number; warnings: { id: string; message: string }[] };
+  progress: string | null;
+}
+export interface ConceptSetView {
+  id: string;
+  title: string;
+  format: "video" | "shorts" | "podcast";
+  state: SetState;
+  createdAt: string;
+  updatedAt: string;
+  count: number;
+  kit: { id: string; title: string } | null;
+  plan: { source: "planner" | "fallback" | null; note: string };
+  costUsd: number;
+  /** Only 16:9 sets can go to YouTube's Test & Compare. */
+  testCompare: boolean;
+  concepts: ConceptView[];
+}
+export interface ExportedFile {
+  name: string;
+  width: number;
+  height: number;
+  bytes: number;
+  quality: number;
+  overBudget: boolean;
+  platform?: string;
+  project?: string;
+}
+export interface ZipExport {
+  name: string;
+  url: string;
+  bytes: number;
+  width?: number | null;
+  height?: number | null;
+  files: ExportedFile[];
+}
+export type PlatformId = "youtube-shorts" | "instagram-reels" | "tiktok";
+export const PLATFORM_LABELS: Record<PlatformId, string> = { "youtube-shorts": "YouTube Shorts", "instagram-reels": "Instagram Reels", tiktok: "TikTok" };
+export type SetEvent =
+  | { type: "snapshot"; set: ConceptSetView }
+  | { type: "set"; set: ConceptSetView }
+  | { type: "concept.progress"; index: number; text: string }
+  | { type: "set.progress"; text: string };
+export const SET_EVENT_NAMES: SetEvent["type"][] = ["snapshot", "set", "concept.progress", "set.progress"];
+
 export type ServerEvent =
   | { type: "snapshot"; project: Project }
   | { type: "project"; project: Project }
@@ -186,9 +282,18 @@ export interface CreateBody {
   title?: string;
   /** Omit for photos: the server sizes the canvas from the first upload and brief.aspect. */
   size?: Size;
-  brief: Record<string, string>;
+  brief: Record<string, string | string[]>;
   /** An existing series id. */
   series?: string;
+  /** A Fabula kit id from `listKits`: its frames and pictures are imported and the brief is prefilled. */
+  kit?: string;
+}
+export interface CreateSetBody {
+  title?: string;
+  brief: Record<string, string | string[]>;
+  kit?: string;
+  /** 2 to 4. */
+  count: number;
 }
 
 /** Everything the screens need from a server; the real client and the mock both implement it. */
@@ -225,4 +330,16 @@ export interface Api {
   designUrl(id: string, nonce: number): string;
   /** URL of an uploaded asset, for thumbnails. */
   assetUrl(id: string, name: string): string;
+  listKits(): Promise<KitList>;
+  createConceptSet(body: CreateSetBody): Promise<ConceptSetView>;
+  uploadSetAsset(id: string, file: File): Promise<{ name: string; width: number; height: number }>;
+  startConceptSet(id: string): Promise<ConceptSetView>;
+  getConceptSet(id: string): Promise<ConceptSetView>;
+  cancelConceptSet(id: string): Promise<ConceptSetView>;
+  anotherConcept(id: string): Promise<ConceptSetView>;
+  subscribeSet(id: string, onEvent: (e: SetEvent) => void): () => void;
+  /** Test & Compare zip of the chosen concepts (at most three). */
+  testCompare(id: string, projects?: string[]): Promise<ZipExport>;
+  /** Vertical covers per platform; one platform is a JPG, several a zip. */
+  platformExport(id: string, platforms?: PlatformId[]): Promise<ZipExport>;
 }

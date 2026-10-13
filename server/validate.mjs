@@ -121,7 +121,8 @@ export function validateDesign(html, { width, height, fonts = [] }) {
         }
       }
       if (key === "style") {
-        css.push(value);
+        // Wrapped in a rule of its own: a bare declaration joined onto the next piece of CSS swallows it.
+        css.push(`[style]{${value.replace(/[{}]/g, " ")}}`);
         if (name === "body") bodyStyle = value;
       }
       if (key === "font-family") for (const f of fontFamilies(value)) if (!GENERIC_FAMILIES.has(f.toLowerCase()) && !known.has(f.toLowerCase())) warn(`Font family "${f}" is not in fonts.json and will fall back.`);

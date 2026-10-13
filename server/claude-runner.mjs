@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { readSeriesFile } from "./series.mjs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { SpawnError, runProcess } from "./process.mjs";
 import { registerCutout, syncAssets } from "./assets.mjs";
 import { fontFamilies, highestVersion } from "./design-files.mjs";
-import { buildFirstPrompt, buildSystemPrompt, installCraft } from "./presets/index.mjs";
+import { buildFirstPrompt, buildSystemPrompt, conceptSection, installCraft, plannerSection } from "./presets/index.mjs";
+import { kitPromptSection } from "./kits.mjs";
 import { SIGNED_OUT, interpretLine, summarizeTool } from "./stream-json.mjs";
 import { electronEnv } from "./renderer.mjs";
 import { formatOf } from "./feed.mjs";
@@ -76,10 +77,25 @@ export async function seriesSection(config, project, projectDir) {
 }
 
 /** The text appended to Claude's system prompt for a turn. `series` is the series section, if any. */
-export function systemPromptFor(config, project, run = resolveRun(config), series = "") {
+export function systemPromptFor(config, project, run = resolveRun(config), series = "", concept = null) {
   let system = buildSystemPrompt(project, fontFamilies(config.fontsDir));
   if (series) system = `${system}\n\n${series}`;
-  return run.mode === "further" ? `${system}\n\n${furtherText()}` : system;
+  if (run.mode === "further") system = `${system}\n\n${furtherText()}`;
+  // A concept-set turn: its own concept and the others, appended last.
+  return concept ? `${system}\n\n${conceptSection(concept.concept, concept.siblings ?? [])}` : system;
+}
+
+/** The "From the video" text for a project imported from a kit, "" otherwise. Read from the project's own copy of kit.json. */
+export async function kitTextFor(config, project, projectDir) {
+  if (!project.kit) return "";
+  try {
+    const kit = JSON.parse(await readFile(path.join(projectDir, "reference", "kit.json"), "utf8"));
+    const names = Object.fromEntries(project.assets.filter((a) => a.kitFile).map((a) => [a.kitFile, a.name]));
+    const contactSheet = project.assets.some((a) => a.name === "kit-contact-sheet.png");
+    return kitPromptSection(kit, { contactSheet, fonts: fontFamilies(config.fontsDir), names });
+  } catch {
+    return "";
+  }
 }
 
 /** The `claude -p` arguments. `systemFile` is a file holding the system prompt (kept off the command line). */
@@ -112,7 +128,7 @@ const RECAP_MESSAGES = 10;
 const RECAP_CHARS = 500;
 
 /** First-turn style prompt for a project whose Claude session is gone: brief, a short recap, then the request. */
-export function buildRecoveryPrompt(project, history, userText, designExists, duplicate = false) {
+export function buildRecoveryPrompt(project, history, userText, designExists, duplicate = false, kitText = "") {
   const recap = history
     .slice(-RECAP_MESSAGES)
     .map((m) => `${m.role === "user" ? "Owner" : "You"}: ${String(m.text).replace(/\s+/g, " ").trim().slice(0, RECAP_CHARS)}`)
@@ -130,7 +146,7 @@ export function buildRecoveryPrompt(project, history, userText, designExists, du
         : "design.html already exists in this folder with the current design: Read it first and edit it rather than starting over.",
     );
   }
-  return `${buildFirstPrompt(project, parts.join("\n\n"))}\n\n${userText}`.trim();
+  return `${buildFirstPrompt(project, parts.join("\n\n"), kitText)}\n\n${userText}`.trim();
 }
 
 const NO_SESSION = /No conversation found|session/i;
@@ -155,7 +171,7 @@ export async function runTurn(options) {
   }
 }
 
-async function runTurnInner({ config, store, id, text, mode = "standard", modelKey = "opus", emit, signal, release }) {
+async function runTurnInner({ config, store, id, text, mode = "standard", modelKey = "opus", emit, signal, release, concept = null }) {
   const run = resolveRun(config, mode, modelKey);
   const projectDir = store.dirOf(id);
   const startedAt = Date.now();
@@ -261,7 +277,7 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
     const promptDir = await mkdtemp(path.join(os.tmpdir(), "imago-prompt-"));
     const promptFile = path.join(promptDir, "system.md");
     try {
-      await writeFile(promptFile, systemPromptFor(config, project, run, await seriesSection(config, project, projectDir)), { mode: 0o600 });
+      await writeFile(promptFile, systemPromptFor(config, project, run, await seriesSection(config, project, projectDir), concept), { mode: 0o600 });
       // A further turn renders more and may fetch images, so it gets twice the time.
       const timeoutMs = run.mode === "further" ? config.turnTimeoutMs * 2 : config.turnTimeoutMs;
       let outcome;
@@ -304,7 +320,8 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
   // A duplicate has history and a design but no session: brief it like a recovered session, with the note that design.html holds the copy.
   const duplicated = needsBrief && Boolean(project.duplicatedFrom);
   const designNow = () => access(path.join(projectDir, "design.html")).then(() => true, () => false);
-  const opening = duplicated ? buildRecoveryPrompt(project, history, text, await designNow(), true) : needsBrief ? buildFirstPrompt(project, text) : text;
+  const kitText = needsBrief ? await kitTextFor(config, project, projectDir) : "";
+  const opening = duplicated ? buildRecoveryPrompt(project, history, text, await designNow(), true, kitText) : needsBrief ? buildFirstPrompt(project, text, kitText) : text;
   let first = await attempt(opening, Boolean(project.sessionId));
   let failure = failureOf(first);
 
@@ -320,7 +337,7 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
       p.briefSent = false;
     });
     const designExists = await access(path.join(projectDir, "design.html")).then(() => true, () => false);
-    first = await attempt(buildRecoveryPrompt(project, history, text, designExists), false);
+    first = await attempt(buildRecoveryPrompt(project, history, text, designExists, false, await kitTextFor(config, project, projectDir)), false);
     failure = failureOf(first);
   }
   const { seen } = first;
@@ -334,5 +351,80 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
   release?.(); // the project is idle now: whoever sees the closing event may export or send again
   if (failure) emit("run.error", failure);
   else emit("run.finished", { ok: true, costUsd: seen.result?.costUsd ?? 0, durationMs: seen.result?.durationMs || Date.now() - startedAt });
-  return { ok: !failure, failure };
+  return { ok: !failure, failure, costUsd: seen.result?.costUsd ?? 0 };
+}
+
+// ---- the concept planner: one locked-down turn per set, in the set's own folder ------------------
+
+// Reads the kit material and the craft files, writes one file. No render, no cut_out, no network.
+const PLANNER_TOOLS = "Read,Write,Glob";
+const PLANNER_ALLOWED = "Read(./**),Glob(./**),Write(./concepts.json)";
+const PLANNER_DISALLOWED = `Bash,WebFetch,WebSearch,Task,NotebookEdit,Edit,${["./assets/**", "./reference/**", "./exports/**"].map((p) => `Write(${p})`).join(",")}`;
+
+/** The planner's `claude -p` arguments: as locked down as a design turn, with no MCP tools at all. */
+export function buildPlannerArgs(config, systemFile = "<system-prompt-file>") {
+  return [
+    "-p",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--model", config.model,
+    "--effort", config.effort,
+    "--restricted",
+    "--setting-sources", "",
+    "--strict-mcp-config",
+    "--mcp-config", JSON.stringify({ mcpServers: {} }),
+    "--tools", PLANNER_TOOLS,
+    "--permission-mode", "dontAsk",
+    "--permission-prompts", "none",
+    "--disable-slash-commands",
+    "--allowedTools", PLANNER_ALLOWED,
+    "--disallowedTools", PLANNER_DISALLOWED,
+    "--append-system-prompt-file", systemFile,
+  ];
+}
+
+/**
+ * Runs the planning turn in `dir` (a folder with the kit's assets, the contact sheet and nothing of any
+ * concept project) and leaves `concepts.json` there. Never throws; its session is never resumed.
+ */
+export async function runPlanner({ config, dir, prompt, count, format, signal, onTool }) {
+  const promptDir = await mkdtemp(path.join(os.tmpdir(), "imago-prompt-"));
+  const promptFile = path.join(promptDir, "system.md");
+  const seen = { result: null };
+  let chain = Promise.resolve();
+  try {
+    await installCraft({ preset: "thumbnail" }, dir).catch(() => {});
+    await writeFile(promptFile, plannerSection({ count, format }), { mode: 0o600 });
+    let outcome;
+    try {
+      outcome = await runProcess({
+        binary: config.claudeBin,
+        args: buildPlannerArgs(config, promptFile),
+        cwd: dir,
+        stdin: prompt,
+        env: electronEnv(config),
+        timeoutMs: config.turnTimeoutMs,
+        signal,
+        onStdoutLine: (line) => {
+          for (const ev of interpretLine(line)) {
+            if (ev.kind === "result") seen.result = ev;
+            else if (ev.kind === "tool_use" && onTool) chain = chain.then(() => onTool(summarizeTool(ev.name, ev.input))).catch(() => {});
+          }
+        },
+      });
+    } catch (error) {
+      outcome = { spawnError: error instanceof SpawnError ? error : new SpawnError(config.claudeBin, error) };
+    }
+    await chain;
+    const costUsd = seen.result?.costUsd ?? 0;
+    const { result } = seen;
+    if (outcome.spawnError) return { ok: false, costUsd, failure: { code: "CLAUDE_MISSING", message: `Claude Code could not be started (${config.claudeBin}).` } };
+    if (outcome.aborted) return { ok: false, costUsd, failure: { code: "CANCELLED", message: "The planning turn was cancelled." } };
+    if (outcome.timedOut) return { ok: false, costUsd, failure: { code: "TIMEOUT", message: `Planning did not finish within ${Math.round(config.turnTimeoutMs / 1000)} seconds.` } };
+    if (result?.isError) return { ok: false, costUsd, failure: SIGNED_OUT.test(result.text) ? SIGNED_OUT_FAILURE : { code: "EXITED", message: result.text || "Claude reported an error." } };
+    if (!result) return { ok: false, costUsd, failure: SIGNED_OUT.test(outcome.stderr) ? SIGNED_OUT_FAILURE : { code: "EXITED", message: `Claude exited without an answer. ${outcome.stderr.slice(-300)}`.trim() } };
+    return { ok: true, costUsd };
+  } finally {
+    await rm(promptDir, { recursive: true, force: true }).catch(() => {});
+  }
 }

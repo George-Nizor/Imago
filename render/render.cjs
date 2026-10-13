@@ -50,7 +50,10 @@ let pageDir = fs.realpathSync(path.dirname(htmlFile));
 const wantMeasure = process.argv.includes("--measure");
 const feedJob = flag("feed") ? JSON.parse(fs.readFileSync(path.resolve(flag("feed")), "utf8")) : null;
 const STATS_WIDTH = 320; // "feed size": statistics are taken on a copy this wide
-const JPEG_QUALITY = 92; // Electron takes 0-100: this is 0.92
+const JPEG_QUALITY = Math.min(100, Math.max(10, Math.round(Number(flag("quality")) || 92))); // Electron takes 0-100: 92 is 0.92
+// With --max-bytes a JPEG is re-encoded at lower quality until it fits (never below JPEG_FLOOR).
+const MAX_BYTES = Number(flag("max-bytes")) || 0;
+const JPEG_FLOOR = 40;
 // The design document is served with no script-src at all (default-src 'none'), so a script the
 // validator missed still cannot run. Fonts and images come from file: (the project and /fonts/).
 const DESIGN_CSP = "default-src 'none'; img-src file: data:; style-src 'unsafe-inline' file:; font-src file: data:; base-uri 'none'; form-action 'none'";
@@ -140,8 +143,16 @@ async function main() {
   if (size.width !== targetW || size.height !== targetH) image = image.resize({ width: targetW, height: targetH, quality: "best" });
 
   let bytes;
+  let quality;
   if (format === "png") bytes = image.toPNG();
-  else if (format === "jpg") bytes = image.toJPEG(JPEG_QUALITY);
+  else if (format === "jpg") {
+    quality = JPEG_QUALITY;
+    bytes = image.toJPEG(quality);
+    while (MAX_BYTES && bytes.length > MAX_BYTES && quality > JPEG_FLOOR) {
+      quality = Math.max(JPEG_FLOOR, quality - 4);
+      bytes = image.toJPEG(quality);
+    }
+  }
   else {
     // nativeImage has no WebP encoder; the page's own canvas does.
     const png = image.toPNG().toString("base64");
@@ -161,7 +172,7 @@ async function main() {
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   fs.writeFileSync(outFile, bytes);
   const final = image.getSize();
-  const result = { ok: true, width: final.width, height: final.height, bytes: bytes.length };
+  const result = { ok: true, width: final.width, height: final.height, bytes: bytes.length, ...(quality ? { quality } : {}) };
   // The design is already on disk: a failure past this point costs the extras, not the render.
   if (wantMeasure) {
     try {
