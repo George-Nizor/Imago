@@ -57,6 +57,10 @@ Chromium with `?mock=1`.
   `WebFetch`. MCP tool names go in `--allowedTools` only (`--tools` is built-ins). The system prompt
   goes through a temp file (`--append-system-prompt-file`), not argv. Tests assert all of it; the real
   flags can only be checked with a paid run, so change them with care.
+- **File-write rules are `Edit(...)`.** Claude Code matches every file write, the Write tool included, against
+  `Edit(<path>)` rules; a `Write(<path>)` rule is silently not honoured (checked 2026-10-13 with real `claude -p`). A turn
+  that may write one file gets `Edit(./that-file)`, and denies use `Edit(...)` too. The planner and the faces classifier
+  shipped with `Write(...)` alone and every real run fell back until this was found; the fake claude cannot catch it.
 - **Origin and files.** Changing requests must carry this server's exact origin (or none, or
   `IMAGO_ALLOWED_ORIGINS`), JSON content type, and no cross-site `Sec-Fetch-Site`. Project files are
   served only as png/jpg/jpeg/webp (design.html and snapshots aside), always with a `sandbox` CSP.

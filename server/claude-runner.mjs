@@ -358,8 +358,10 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
 
 // Reads the kit material and the craft files, writes one file. No render, no cut_out, no network.
 const PLANNER_TOOLS = "Read,Write,Glob";
-const PLANNER_ALLOWED = "Read(./**),Glob(./**),Write(./concepts.json)";
-const PLANNER_DISALLOWED = `Bash,WebFetch,WebSearch,Task,NotebookEdit,Edit,${["./assets/**", "./reference/**", "./exports/**"].map((p) => `Write(${p})`).join(",")}`;
+// File-write permission rules are matched as Edit(...), which also governs the Write tool; a Write(...)
+// path rule is not honoured, so the one writable file is granted as Edit and the rest denied the same way.
+const PLANNER_ALLOWED = "Read(./**),Glob(./**),Edit(./concepts.json)";
+const PLANNER_DISALLOWED = `Bash,WebFetch,WebSearch,Task,NotebookEdit,${["./assets/**", "./reference/**", "./exports/**"].map((p) => `Edit(${p})`).join(",")}`;
 
 /** The planner's `claude -p` arguments: as locked down as a design turn, with no MCP tools at all. */
 export function buildPlannerArgs(config, systemFile = "<system-prompt-file>") {
@@ -433,8 +435,8 @@ export async function runPlanner({ config, dir, prompt, count, format, signal, o
 
 // Reads the batch's images and contact sheet, writes one file. No MCP, no render, no network.
 const FACES_TOOLS = "Read,Write,Glob";
-const FACES_ALLOWED = "Read(./**),Glob(./**),Write(./labels.json)";
-const FACES_DISALLOWED = `Bash,WebFetch,WebSearch,Task,NotebookEdit,Edit,${["./images/**", "./sheet.png"].map((p) => `Write(${p})`).join(",")}`;
+const FACES_ALLOWED = "Read(./**),Glob(./**),Edit(./labels.json)";
+const FACES_DISALLOWED = `Bash,WebFetch,WebSearch,Task,NotebookEdit,${["./images/**", "./sheet.png"].map((p) => `Edit(${p})`).join(",")}`;
 
 /** The classifier's `claude -p` arguments: the planner's lock-down on the faces model at low effort. */
 export function buildFacesArgs(config, systemFile = "<system-prompt-file>") {

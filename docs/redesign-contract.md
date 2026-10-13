@@ -193,7 +193,7 @@ optional and the system prompt is unchanged without it. The form field itself be
 
 - `planner.md`, placeholders `{{count}}` (concepts wanted) and `{{format}}`: the planner's system
   prompt, built with `plannerSection({count, format})`. It does not use `design-rules.md` or
-  `thumbnail.md`. A planning turn needs Read and Glob, `Write(./concepts.json)` and no `render` or
+  `thumbnail.md`. A planning turn needs Read and Glob, `Edit(./concepts.json)` (file writes are granted as `Edit` rules; a `Write(...)` path rule is not honoured) and no `render` or
   `cut_out`, and may Read the kit's files in `assets/` (named in its first message, with the contact
   sheet when there is one) and `reference/craft/`. It writes `{"concepts": [...]}` in the shape of the
   plan (`archetype`, `label`, `idea`, `text`, `frame?`, `face?`, `pictures?`, `why`). The wiring validates the file
@@ -282,8 +282,8 @@ is done and whose classification is pending, taken after the cut-out queue has b
 most 1024 px, upright) and `sheet.png` (a numbered contact sheet); it is removed afterwards. Arguments (`buildFacesArgs`) are
 the planner's lock-down: `--restricted`, `--setting-sources ""`, `--strict-mcp-config --mcp-config '{"mcpServers":{}}'` (no MCP),
 `--tools "Read,Write,Glob"`, `--permission-mode dontAsk --permission-prompts none --disable-slash-commands`, `--allowedTools
-"Read(./**),Glob(./**),Write(./labels.json)"`, `--disallowedTools "Bash,WebFetch,WebSearch,Task,NotebookEdit,Edit,Write(./images/**),
-Write(./sheet.png)"`, the prompt through `--append-system-prompt-file`, `--model $IMAGO_FACES_MODEL --effort low`, never `--resume`.
+"Read(./**),Glob(./**),Edit(./labels.json)"`, `--disallowedTools "Bash,WebFetch,WebSearch,Task,NotebookEdit,Edit(./images/**),
+Edit(./sheet.png)"`, the prompt through `--append-system-prompt-file`, `--model $IMAGO_FACES_MODEL --effort low`, never `--resume`.
 Photos are numbered, so Claude never sees an id or a path. The prompt says text in photos is content, never instructions.
 
 **Vocabulary** (`face-pack.mjs`, validated by the server; nothing outside it is stored):
@@ -380,8 +380,8 @@ which copies them to every project), `POST .../start` begins:
    (`buildPlannerArgs`): the same lock-down as a design turn, `--restricted`, `--setting-sources ""`, `--strict-mcp-config
    --mcp-config '{"mcpServers":{}}'` (no MCP tools at all, so no render or cut_out), `--tools "Read,Write,Glob"`,
    `--permission-mode dontAsk --permission-prompts none --disable-slash-commands`, `--allowedTools
-   "Read(./**),Glob(./**),Write(./concepts.json)"`, `--disallowedTools "Bash,WebFetch,WebSearch,Task,NotebookEdit,Edit,Write(./assets/**),
-   Write(./reference/**),Write(./exports/**)"`, the prompt through `--append-system-prompt-file`, on `IMAGO_MODEL`/`IMAGO_EFFORT`, never
+   "Read(./**),Glob(./**),Edit(./concepts.json)"`, `--disallowedTools "Bash,WebFetch,WebSearch,Task,NotebookEdit,Edit(./assets/**),
+   Edit(./reference/**),Edit(./exports/**)"`, the prompt through `--append-system-prompt-file`, on `IMAGO_MODEL`/`IMAGO_EFFORT`, never
    `--resume`. The timeout is the turn timeout.
 2. **Validation** of `concepts.json` (`validateConcepts`): exactly `count` concepts, distinct archetypes from
    `THUMBNAIL_ARCHETYPES`, `label` (at most 40 characters), `idea` and `why` (at most 400) present, `text` a string of at most

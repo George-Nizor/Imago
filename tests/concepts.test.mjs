@@ -172,8 +172,8 @@ test("a set of three: planner, three parallel design turns, siblings, shared cut
     assert.equal(flagOf(a, "--permission-mode"), "dontAsk");
     assert.equal(flagOf(a, "--permission-prompts"), "none");
     assert.equal(flagOf(a, "--tools"), "Read,Write,Glob");
-    assert.equal(flagOf(a, "--allowedTools"), "Read(./**),Glob(./**),Write(./concepts.json)");
-    for (const denied of ["Bash", "WebFetch", "WebSearch", "Task", "NotebookEdit", "Edit", "Write(./assets/**)", "Write(./reference/**)"]) assert.ok(flagOf(a, "--disallowedTools").split(",").includes(denied), denied);
+    assert.equal(flagOf(a, "--allowedTools"), "Read(./**),Glob(./**),Edit(./concepts.json)");
+    for (const denied of ["Bash", "WebFetch", "WebSearch", "Task", "NotebookEdit", "Edit(./assets/**)", "Edit(./reference/**)"]) assert.ok(flagOf(a, "--disallowedTools").split(",").includes(denied), denied);
     assert.ok(a.includes("--strict-mcp-config"));
     assert.ok(a.includes("--disable-slash-commands"));
     assert.equal(flagOf(a, "--setting-sources"), "");

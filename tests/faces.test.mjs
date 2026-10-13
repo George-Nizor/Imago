@@ -148,8 +148,8 @@ test("upload, cut-out queue and classification: the face ends ready with labels,
     assert.equal(flagOf(a, "--permission-mode"), "dontAsk");
     assert.equal(flagOf(a, "--permission-prompts"), "none");
     assert.equal(flagOf(a, "--tools"), "Read,Write,Glob");
-    assert.equal(flagOf(a, "--allowedTools"), "Read(./**),Glob(./**),Write(./labels.json)");
-    for (const denied of ["Bash", "WebFetch", "WebSearch", "Task", "NotebookEdit", "Edit", "Write(./images/**)"]) assert.ok(flagOf(a, "--disallowedTools").split(",").includes(denied), denied);
+    assert.equal(flagOf(a, "--allowedTools"), "Read(./**),Glob(./**),Edit(./labels.json)");
+    for (const denied of ["Bash", "WebFetch", "WebSearch", "Task", "NotebookEdit", "Edit(./images/**)"]) assert.ok(flagOf(a, "--disallowedTools").split(",").includes(denied), denied);
     assert.deepEqual(JSON.parse(flagOf(a, "--mcp-config")), { mcpServers: {} });
     assert.ok(a.includes("--strict-mcp-config") && a.includes("--disable-slash-commands"));
     assert.equal(flagOf(a, "--setting-sources"), "");
