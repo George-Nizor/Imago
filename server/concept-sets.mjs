@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { registerCutout, registerFace } from "./assets.mjs";
 import { BRAND_ASSET_PREFIX, copySnapshotFiles, readSnapshot } from "./brands.mjs";
+import { STOPWORDS, tokenize } from "./checks.mjs";
 import { facesRoot, orderFaces, packSelection, readAllFaces, summarize, usable, readSettings, takeFace } from "./face-pack.mjs";
 import { renderFaceSheet } from "./face-sheet.mjs";
 import { runPlanner } from "./claude-runner.mjs";
@@ -48,12 +49,21 @@ const FACE_ORDER = ["reaction", "curiosity-gap", "result-reveal", "story-moment"
 const OBJECT_ORDER = ["object-hero", "curiosity-gap", "result-reveal", "number", "story-moment", "reaction", "versus", "before-after"];
 
 const wordCount = (text) => text.trim().split(/\s+/).filter(Boolean).length;
+const sameTitle = (a, b) => tokenize(a).join(" ") === tokenize(b).join(" ");
+
+/** Does the words on a thumbnail only say what its title already says? (Every content word of `text` is one of the title's.) */
+export function repeatsTitle(text, title) {
+  const words = tokenize(text ?? "").filter((w) => !STOPWORDS.has(w));
+  const known = new Set(tokenize(title ?? "").filter((w) => !STOPWORDS.has(w)));
+  return words.length > 0 && words.every((w) => known.has(w));
+}
 
 /**
  * Checks planner output against the plan's schema. `assets` is the set of file names the concepts may
- * point at (without the `assets/` prefix). Returns {ok, concepts} or {ok: false, reason}.
+ * point at (without the `assets/` prefix). `titles` (a title A/B test) makes concept N the one for title N: it must
+ * echo that title and its words may never repeat it. Returns {ok, concepts} or {ok: false, reason}.
  */
-export function validateConcepts(raw, { count, assets, faces = new Set(), requireFace = false }) {
+export function validateConcepts(raw, { count, assets, faces = new Set(), requireFace = false, titles = null }) {
   const bad = (reason) => ({ ok: false, reason });
   if (!raw || typeof raw !== "object" || !Array.isArray(raw.concepts)) return bad("concepts.json has no concepts list.");
   if (raw.concepts.length !== count) return bad(`Expected ${count} concepts, found ${raw.concepts.length}.`);
@@ -71,13 +81,17 @@ export function validateConcepts(raw, { count, assets, faces = new Set(), requir
     const why = line(c.why, 400, "why");
     if (!label || !idea || !why) return bad(`${at} needs a label, an idea and a why of sensible length.`);
     if (typeof c.text !== "string" || c.text.length > 60 || wordCount(c.text) > 4) return bad(`${at}: text must be at most 4 words.`);
+    if (titles) {
+      if (typeof c.title !== "string" || !sameTitle(c.title, titles[i])) return bad(`${at}: title must be exactly ${JSON.stringify(titles[i])}.`);
+      if (repeatsTitle(c.text, titles[i])) return bad(`${at}: the text repeats its title; the words must say what the title does not.`);
+    }
     const picture = (p) => typeof p === "string" && p.startsWith("assets/") && isSafeLeaf(p.slice(7)) && assets.has(p.slice(7));
     if (c.frame !== undefined && c.frame !== null && !picture(c.frame)) return bad(`${at}: frame ${JSON.stringify(String(c.frame).slice(0, 60))} is not an asset.`);
     const pictures = c.pictures === undefined || c.pictures === null ? [] : c.pictures;
     if (!Array.isArray(pictures) || pictures.length > 6 || !pictures.every(picture)) return bad(`${at}: pictures must be existing assets.`);
     if (c.face !== undefined && c.face !== null && !(typeof c.face === "string" && faces.has(c.face))) return bad(`${at}: face ${JSON.stringify(String(c.face).slice(0, 20))} is not in the face pack.`);
     if (requireFace && !c.face) return bad(`${at}: the face source is the owner's pack, so every concept needs a pack face.`);
-    out.push({ archetype: c.archetype, label, idea, text: c.text.replace(/\s+/g, " ").trim(), ...(c.frame ? { frame: c.frame } : {}), ...(c.face ? { face: c.face } : {}), ...(pictures.length ? { pictures } : {}), why });
+    out.push({ archetype: c.archetype, label, idea, text: c.text.replace(/\s+/g, " ").trim(), ...(titles ? { title: titles[i] } : {}), ...(c.frame ? { frame: c.frame } : {}), ...(c.face ? { face: c.face } : {}), ...(pictures.length ? { pictures } : {}), why });
   }
   return { ok: true, concepts: out };
 }
@@ -103,7 +117,7 @@ export function diversifyFaces(concepts, order) {
  * Server-chosen concepts for when the planner's file is missing or invalid, and for "another concept":
  * distinct archetypes (never one in `used`), each on a different face frame where the kit has several.
  */
-export function fallbackConcepts({ count, kit = null, records = [], used = [], uploads = [], packFaces = [], preferPack = false }) {
+export function fallbackConcepts({ count, kit = null, records = [], used = [], uploads = [], packFaces = [], preferPack = false, titles = null }) {
   const nameOf = (file) => records.find((r) => r.kitFile === file)?.name;
   const faces = (kit?.frames ?? []).filter((f) => f.kind === "face").sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).map((f) => nameOf(f.file)).filter(Boolean);
   const screens = (kit?.frames ?? []).filter((f) => f.kind === "screen").map((f) => nameOf(f.file)).filter(Boolean);
@@ -117,7 +131,7 @@ export function fallbackConcepts({ count, kit = null, records = [], used = [], u
   const rest = THUMBNAIL_ARCHETYPES.filter((a) => !used.includes(a) && !order.includes(a));
   const picks = [...order, ...rest].slice(0, count);
   let turn = used.length; // spreads frames across the whole set, not just this call
-  return picks.map((archetype) => {
+  return picks.map((archetype, n) => {
     const pick = (pool) => (pool.length ? `assets/${pool[turn % pool.length]}` : undefined);
     let frame;
     let face;
@@ -136,6 +150,7 @@ export function fallbackConcepts({ count, kit = null, records = [], used = [], u
       label: ARCHETYPE_LABELS[archetype],
       idea: IDEAS[archetype],
       text: null, // the designer chooses the words
+      ...(titles ? { title: titles[n] } : {}),
       ...(frame ? { frame } : {}),
       ...(face ? { face } : {}),
       ...(extra.length ? { pictures: extra } : {}),
@@ -241,6 +256,7 @@ export function createConceptSets(ctx) {
       const c = m.concept ?? {};
       concepts.push({
         index: m.index,
+        forTitle: m.title ?? null,
         projectId: m.projectId,
         removed: !project,
         state: !project ? "removed" : m.state,
@@ -252,6 +268,7 @@ export function createConceptSets(ctx) {
         why: c.why ?? null,
         frame: c.frame ?? null,
         face: c.face ?? null,
+        faceThumb: c.face ? `/faces/${c.face}/thumb.png` : null,
         title: project?.title ?? null,
         current: project?.current ?? 0,
         versionCount: project?.versions?.length ?? 0,
@@ -266,8 +283,13 @@ export function createConceptSets(ctx) {
         progress: m.progress ?? null,
       });
     }
+    const source = set.sourceProjectId ? await store.read(set.sourceProjectId).catch(() => null) : null;
     return {
       id: set.id,
+      kind: set.kind ?? "concepts",
+      titles: set.titles ?? null,
+      picked: set.picked ?? null,
+      source: set.sourceProjectId ? { projectId: set.sourceProjectId, removed: !source, title: source?.title ?? null, renderUrl: source?.current ? `/projects/${source.id}/renders/v${source.current}.png` : null } : null,
       title: set.title,
       format: set.format,
       state: set.state,
@@ -333,7 +355,7 @@ export function createConceptSets(ctx) {
     },
 
     /** Creates the set and its N projects (no turn yet). State: draft. */
-    async create({ title, brief, kit, count, format, brand = null, createProject }) {
+    async create({ title, brief, kit, count, format, brand = null, createProject, titles = null }) {
       await fs.mkdir(root, { recursive: true });
       let id;
       for (let attempt = 0; ; attempt += 1) {
@@ -355,7 +377,9 @@ export function createConceptSets(ctx) {
           if (written.sheet) sheetFrom = path.join(work, "assets", "kit-contact-sheet.png");
         }
         for (let i = 0; i < count; i += 1) {
-          const project = await createProject({ preset: "thumbnail", title: `${title} · concept ${i + 1}`.slice(0, 80), brief }, { kit, sheetFrom, brand, extra: { conceptSet: { id, index: i, archetype: null, label: null } } });
+          // A title test: each concept is made for its own title, which is its project's title and brief.
+          const own = titles ? { ...brief, title: titles[i] } : brief;
+          const project = await createProject({ preset: "thumbnail", title: titles ? titles[i].slice(0, 80) : `${title} · concept ${i + 1}`.slice(0, 80), brief: own }, { kit, sheetFrom, brand, extra: { conceptSet: { id, index: i, archetype: null, label: null } } });
           created.push(project.id);
         }
         // The planner gets the same snapshot the concepts did, so it plans in the brand's palette.
@@ -379,9 +403,10 @@ export function createConceptSets(ctx) {
         brand: brand ? { id: brand.brand.id, name: brand.brand.name } : null,
         kitAssets: kit ? (await store.read(created[0])).assets.filter((a) => a.kitFile || a.name === "kit-contact-sheet.png") : [],
         brief,
+        ...(titles ? { titles } : {}),
         plan: { source: null, note: "", concepts: [] },
         costUsd: 0,
-        members: created.map((projectId, index) => ({ index, projectId, state: "planning", error: null, concept: null })),
+        members: created.map((projectId, index) => ({ index, projectId, state: "planning", error: null, concept: null, ...(titles ? { title: titles[index] } : {}) })),
       };
       await fs.writeFile(fileOf(id), `${JSON.stringify(set, null, 2)}\n`);
       for (const m of set.members) {
@@ -437,6 +462,8 @@ export function createConceptSets(ctx) {
     /** One more concept with an archetype not used yet, designed from the others as siblings. */
     async another(id) {
       const set = await read(id);
+      if (set.titles) throw new SetError("NOT_SUPPORTED", "A title test has one concept per title; start another test to try more titles.", 409);
+      if (set.kind === "faces") throw new SetError("NOT_SUPPORTED", "A set of other faces cannot take another concept.", 409);
       if (runs.has(id) || ["draft", "planning", "designing"].includes(set.state)) throw new SetError("SET_BUSY", "Wait for the set to finish first.", 409);
       const used = set.members.map((m) => m.concept?.archetype ?? m.archetype).filter(Boolean);
       if (set.members.length >= MAX_CONCEPTS || used.length >= MAX_CONCEPTS) throw new SetError("TOO_MANY", `A set holds at most ${MAX_CONCEPTS} concepts, one per archetype.`, 409);
@@ -465,6 +492,69 @@ export function createConceptSets(ctx) {
       })()
         .catch(() => {})
         .finally(() => runs.delete(id));
+      return api.view(id);
+    },
+
+    /**
+     * A set of "the same design with another face": the source project's copies already exist (`members[].projectId`, each with its
+     * new face in place) and each gets one locked-down face-swap turn, in parallel under the concept limit. The set starts at once
+     * (there is no planner). `members`: [{projectId, concept, text}].
+     */
+    async createFaceVariants({ title, format, source, members, brief = {} }) {
+      await fs.mkdir(root, { recursive: true });
+      let id;
+      for (let attempt = 0; ; attempt += 1) {
+        id = `${slug(title)}-${randomBytes(2).toString("hex")}`.slice(0, 64);
+        try {
+          await fs.mkdir(dirOf(id));
+          break;
+        } catch (error) {
+          if (error.code !== "EEXIST" || attempt >= 5) throw error;
+        }
+      }
+      const now = new Date().toISOString();
+      const set = {
+        schemaVersion: 1,
+        kind: "faces",
+        id,
+        title,
+        format,
+        count: members.length,
+        state: "designing",
+        createdAt: now,
+        updatedAt: now,
+        sourceProjectId: source,
+        kit: null,
+        brand: null,
+        kitAssets: [],
+        brief,
+        plan: { source: "faces", note: "", concepts: members.map((m) => m.concept) },
+        costUsd: 0,
+        members: members.map((m, index) => ({ index, projectId: m.projectId, state: "waiting", error: null, concept: m.concept, task: m.text })),
+      };
+      await fs.writeFile(fileOf(id), `${JSON.stringify(set, null, 2)}\n`);
+      for (const m of set.members) {
+        byProject.set(m.projectId, id);
+        memberIndex.set(m.projectId, m.index);
+      }
+      return set;
+    },
+
+    /** Runs a face-variant set's turns in the background. */
+    async startFaceVariants(id) {
+      const set = await read(id);
+      const ctl = new AbortController();
+      runs.set(id, ctl);
+      void Promise.allSettled(set.members.map((m) => runMember(id, m, ctl, { text: m.task, kind: "face-swap" }))).finally(() => runs.delete(id));
+      return api.view(id);
+    },
+
+    /** The owner's choice from a set: the project is starred and remembered as the pick; the others stay in the library. */
+    async pick(id, projectId) {
+      const set = await read(id);
+      if (!set.members.some((m) => m.projectId === projectId)) throw new SetError("NOT_A_MEMBER", "That project is not part of this set.", 400);
+      await store.mutate(projectId, (p) => void (p.starred = true), { touch: false });
+      await mutate(id, (s) => void (s.picked = projectId));
       return api.view(id);
     },
 
@@ -565,7 +655,9 @@ export function createConceptSets(ctx) {
     const packFaces = (await packOrder());
     const faceSource = set.brief?.faceSource;
     const requireFace = faceSource === "pack" && packShown > 0;
+    const titles = set.titles ?? null;
     const text = [
+      titles ? `This is a title A/B test of ${titles.length} titles: ${titles.map((t, i) => `${i + 1}. ${JSON.stringify(t)}`).join("; ")}. Plan one thumbnail concept per title, in that order, each with its own idea; read the "Title A/B test" part of your instructions.` : "",
       `Plan ${set.count} different thumbnail concepts for this video and write concepts.json.`,
       requireFace ? `Every concept must set "face" to a different pack id (read faces/sheet.png and faces/faces.json) whose expression and gesture match that concept's emotion, whose gaze points toward the side the text will take (or a face that can be mirrored: mirrorSafe, and the pack setting allows it), and of the best quality grade that fits.` : "",
       packShown ? `The owner has a face pack of ${usableIds.size} of their own faces: read faces/sheet.png and faces/faces.json, and set "face" on a concept to a pack id when no better real frame exists.` : "",
@@ -574,7 +666,7 @@ export function createConceptSets(ctx) {
     const names = Object.fromEntries((set.kitAssets ?? []).filter((a) => a.kitFile).map((a) => [a.kitFile, a.name]));
     const grades = Object.fromEntries((set.kitAssets ?? []).filter((a) => a.kitFile && a.quality?.grade).map((a) => [a.kitFile, a.quality.grade]));
     const kitText = kit ? kitPromptSection(kit, { contactSheet: (set.kitAssets ?? []).some((a) => a.name === "kit-contact-sheet.png"), fonts: fontFamilies(config.fontsDir), names, faceSource, grades }) : "";
-    const prompt = buildFirstPrompt({ preset: "thumbnail", brief: set.brief }, text, kitText);
+    const prompt = buildFirstPrompt({ preset: "thumbnail", brief: titles ? { ...set.brief, title: titles.map((t) => `"${t}"`).join(" or ") } : set.brief }, text, kitText);
     await fs.rm(path.join(work, "concepts.json"), { force: true });
     const outcome = await runPlanner({
       config,
@@ -582,6 +674,7 @@ export function createConceptSets(ctx) {
       prompt,
       count: set.count,
       format: set.format,
+      titles,
       brand: await readSnapshot(work),
       signal: ctl.signal,
       onTool: (summary) => broadcast(set.id, "set.progress", { text: summary }),
@@ -592,7 +685,7 @@ export function createConceptSets(ctx) {
       source: "fallback",
       note,
       cost: outcome.costUsd,
-      concepts: fallbackConcepts({ count: set.count, kit, records: set.kitAssets ?? [], uploads, packFaces, preferPack: faceSource === "pack" }),
+      concepts: fallbackConcepts({ count: set.count, kit, records: set.kitAssets ?? [], uploads, packFaces, preferPack: faceSource === "pack", titles }),
     });
     if (!outcome.ok) {
       if (outcome.failure.code === "CANCELLED" || ["CLAUDE_MISSING", "CLAUDE_SIGNED_OUT"].includes(outcome.failure.code)) return { failure: outcome.failure, cost: outcome.costUsd };
@@ -604,7 +697,7 @@ export function createConceptSets(ctx) {
     } catch {
       return fallback("The planner wrote no readable concepts.json, so Imago chose the concepts.");
     }
-    const checked = validateConcepts(parsed, { count: set.count, assets, faces: usableIds, requireFace });
+    const checked = validateConcepts(parsed, { count: set.count, assets, faces: usableIds, requireFace, titles });
     if (!checked.ok) return fallback(`The planner's concepts were not usable (${checked.reason}), so Imago chose the concepts.`);
     return { source: "planner", note: "", cost: outcome.costUsd, concepts: diversifyFaces(checked.concepts, packFaces) };
   }
@@ -647,7 +740,7 @@ export function createConceptSets(ctx) {
     if (!face) return null;
     try {
       const made = await takeFace(config.dataDir, store.dirOf(member.projectId), face);
-      await registerFace(store, member.projectId, { name: made.name, width: made.width, height: made.height, faceId: face });
+      await registerFace(store, member.projectId, { name: made.name, width: made.width, height: made.height, faceId: face, stamp: made.stamp });
       return made.name;
     } catch {
       return null; // the designer can still find_faces and use_face itself
@@ -663,13 +756,17 @@ export function createConceptSets(ctx) {
       cutout ? `A cut-out of its main picture is ready: assets/${cutout} (background already removed).` : "",
       faceName ? `Its face is assets/${faceName}, from the owner's face pack (already cut out; use_face with mirror gives the other-facing copy when allowed). Respect its quality grade and match its gaze to the text side.` : "",
     ].filter(Boolean).join(" ");
-    const setMember = (patch) => mutate(id, (s) => void Object.assign(s.members.find((m) => m.index === member.index) ?? {}, patch));
+    await runMember(id, member, ctl, { text, concept: { concept, siblings } });
+  }
+
+  /** One member's turn, under the concurrency limit; records its outcome and cost. A failure never touches the others. */
+  async function runMember(id, member, ctl, turn) {
     await limit(async () => {
-      if (ctl.signal.aborted) return setMember({ state: "cancelled" });
-      await setMember({ state: "designing" });
+      if (ctl.signal.aborted) return mutate(id, (s) => void Object.assign(s.members.find((m) => m.index === member.index) ?? {}, { state: "cancelled" }));
+      await mutate(id, (s) => void Object.assign(s.members.find((m) => m.index === member.index) ?? {}, { state: "designing" }));
       let result;
       try {
-        result = await ctx.startTurn(member.projectId, { text, concept: { concept, siblings } });
+        result = await ctx.startTurn(member.projectId, turn);
       } catch (error) {
         result = { ok: false, failure: { code: error.code ?? "EXITED", message: String(error?.message ?? error) }, costUsd: 0 };
       }
@@ -704,7 +801,7 @@ export function createConceptSets(ctx) {
         store
           .mutate(m.projectId, (p) => {
             p.conceptSet = { ...p.conceptSet, archetype: m.concept.archetype, label: m.concept.label };
-            p.title = `${set.title} · ${m.concept.label}`.slice(0, 80);
+            if (!set.titles) p.title = `${set.title} · ${m.concept.label}`.slice(0, 80);
           }, { touch: false })
           .catch(() => {}),
       ),

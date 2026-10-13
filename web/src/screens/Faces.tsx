@@ -5,6 +5,7 @@ import { Icon } from "../brand/Icon.js";
 import { Btn, Spinner } from "../components.js";
 import { errorText } from "../lib.js";
 import { Dialog, Glyph } from "../library/ui.js";
+import { FaceUsagePanel } from "../face-tools.js";
 import { useToast } from "../library/hooks.js";
 
 const ACCEPT = ["image/png", "image/jpeg", "image/webp"];
@@ -452,6 +453,7 @@ function EditFace({ f, mirrorAll, packRetouch, packStrength, onRetouch, onClose,
             <span>Description</span>
             <input type="text" maxLength={140} value={labels.description} onChange={(e) => set("description", e.target.value)} />
           </label>
+          <FaceUsagePanel faceId={f.id} />
           {f.labelsEditedByOwner && <p className="muted small">You edited these labels, so Reclassify leaves them alone.</p>}
         </div>
       </div>
@@ -509,14 +511,14 @@ function Compare({ before, after, busy }: { before: string; after: string | null
   const [at, setAt] = useState(50);
   if (!after) {
     return (
-      <div className="compare">
+      <div className="ba-compare">
         <img src={before} alt="" />
         {busy && <span className="face-busy"><Spinner label="Retouching" />Retouching…</span>}
       </div>
     );
   }
   return (
-    <div className="compare">
+    <div className="ba-compare">
       <img src={before} alt="Before: the plain cut-out" />
       <img className="compare-after" src={after} alt="After: retouched" style={{ clipPath: `inset(0 0 0 ${at}%)` }} />
       <span className="compare-tag is-before">Before</span>

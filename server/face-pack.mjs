@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_RETOUCH_STRENGTH } from "./face-retouch.mjs";
+import { bakeSticker, limitFaceSize, resolveSticker } from "./face-sticker.mjs";
 import { ID_PATTERN } from "./paths.mjs";
 
 export const EXPRESSIONS = ["smile", "laugh", "surprise", "shock", "excited", "thinking", "sceptical", "confused", "intense", "angry", "sad", "neutral"];
@@ -261,31 +262,117 @@ export function packSelection(faces, cap = 24) {
 
 // ---- using a face in a project ----------------------------------------------------------------------
 
-export const faceAssetName = (id, mirrored = false) => `face-${id}${mirrored ? "-mirrored" : ""}.png`;
-export const FACE_ASSET = /^face-([a-f0-9]{8})(-mirrored)?\.png$/;
+export const faceAssetName = (id, mirrored = false, sticker = false) => `face-${id}${mirrored ? "-mirrored" : ""}${sticker ? "-sticker" : ""}.png`;
+export const FACE_ASSET = /^face-([a-f0-9]{8})(-mirrored)?(-sticker)?\.png$/;
+
+/** The pack file a face's copy comes from, and when it last changed: how a project knows its copy is out of date. */
+export async function packSource(dataDir, face, settings) {
+  const file = faceImageFile(face, settings);
+  const stat = await fs.stat(path.join(facesRoot(dataDir), face.id, file));
+  return { file, mtimeMs: Math.round(stat.mtimeMs) };
+}
 
 /**
  * Copies a face's cut-out (its retouched version when retouching is on) into `<projectDir>/assets/` as face-<id>.png, or as face-<id>-mirrored.png with
- * the pixels really flipped. Returns {name, width, height, id, mirrored, grade}. Refuses a mirror when the
+ * the pixels really flipped. A face wider or taller than 2400 px is scaled down to that (the pack keeps the full size). With `sticker`
+ * (true, or {cream?, ink?, displayWidth?}) the outline is baked into the PNG as face-<id>[-mirrored]-sticker.png, see face-sticker.mjs.
+ * Returns {name, id, mirrored, width, height, grade, faceHeightPx, retouched, stamp, sticker?, display?}. Refuses a mirror when the
  * shot has text or a logo in it, and any face the owner hid or that is not ready.
  */
-export async function takeFace(dataDir, projectDir, id, { mirror = false } = {}) {
+export async function takeFace(dataDir, projectDir, id, { mirror = false, sticker = false } = {}) {
   const face = await readFace(dataDir, id);
   if (!face) throw new Error(`There is no face ${JSON.stringify(String(id).slice(0, 20))} in the pack.`);
   if (face.hidden) throw new Error("The owner hid this face; choose another.");
   if (!usable(face)) throw new Error("This face is not ready yet (still being cut out or classified).");
   const settings = await readSettings(dataDir);
   if (mirror && !mirrorAllowedFor(face, settings)) throw new Error("Mirroring is not allowed for this face (the shot has text or a logo in it, or the owner switched it off); use it as it is or pick another face.");
-  const name = faceAssetName(id, mirror);
+  const resolved = await resolveSticker(sticker, projectDir);
+  const name = faceAssetName(id, mirror, Boolean(resolved));
   const dest = path.join(projectDir, "assets", name);
-  const source = path.join(facesRoot(dataDir), id, faceImageFile(face, settings));
+  const stamp = await packSource(dataDir, face, settings);
+  const source = path.join(facesRoot(dataDir), id, stamp.file);
   await fs.mkdir(path.dirname(dest), { recursive: true });
-  if (mirror) {
-    const sharp = (await import("sharp")).default;
-    const flipped = await sharp(await fs.readFile(source), { limitInputPixels: 100_000_000 }).flop().png().toBuffer();
-    await fs.writeFile(dest, flipped);
+  const bytes = await fs.readFile(source);
+  let out;
+  let display;
+  if (resolved) {
+    // Mirror first, then bake: the outline is drawn on the face as it will be placed.
+    const base = mirror ? (await limitFaceSize(bytes, { flop: true }))?.data ?? bytes : bytes;
+    const baked = await bakeSticker(base, resolved);
+    out = { data: baked.data, width: baked.width, height: baked.height };
+    display = baked.display;
   } else {
-    await fs.copyFile(source, dest);
+    out = await limitFaceSize(bytes, { flop: mirror });
   }
-  return { name, id, mirrored: mirror, width: face.cutout.width, height: face.cutout.height, grade: face.quality?.grade ?? null, faceHeightPx: face.quality?.faceHeightPx ?? null, retouched: source.endsWith("retouched.png") };
+  if (out) await fs.writeFile(dest, out.data);
+  else await fs.copyFile(source, dest);
+  return {
+    name,
+    id,
+    mirrored: mirror,
+    width: out?.width ?? face.cutout.width,
+    height: out?.height ?? face.cutout.height,
+    grade: face.quality?.grade ?? null,
+    faceHeightPx: face.quality?.faceHeightPx ?? null,
+    retouched: stamp.file === "retouched.png",
+    stamp,
+    ...(resolved ? { sticker: resolved, display } : {}),
+  };
+}
+
+/** Is the project's copy of each of its pack faces older than the pack's? `assets` are the project's records. */
+export async function faceStatus(dataDir, projectDir, assets) {
+  const faces = new Map();
+  for (const a of assets.filter((x) => x.kind === "face" && x.faceId)) faces.set(a.faceId, [...(faces.get(a.faceId) ?? []), a]);
+  const settings = await readSettings(dataDir);
+  const out = [];
+  for (const [id, list] of faces) {
+    const face = await readFace(dataDir, id);
+    if (!face || face.hidden || !usable(face)) {
+      out.push({ id, state: "unavailable", assets: list.map((a) => a.name), reason: !face ? "The face is no longer in the pack." : face.hidden ? "The owner hid this face." : "The face is not ready." });
+      continue;
+    }
+    const now = await packSource(dataDir, face, settings).catch(() => null);
+    let stale = false;
+    for (const a of list) {
+      const had = a.stamp ?? { file: null, mtimeMs: (await fs.stat(path.join(projectDir, "assets", a.name)).catch(() => null))?.mtimeMs ?? Infinity };
+      if (now && ((had.file && had.file !== now.file) || now.mtimeMs > had.mtimeMs + 1)) stale = true;
+    }
+    out.push({ id, state: stale ? "stale" : "current", assets: list.map((a) => a.name) });
+  }
+  return out;
+}
+
+/**
+ * Faces for a "try other faces" set when the owner gave only a count: the best faces with distinct expressions, none already in
+ * the design (`exclude`), preferring expressions other than the design's own (`avoidExpression`), then the next best faces.
+ */
+export function pickVariantFaces(faces, { count, exclude = [], avoidExpression = null }) {
+  const pool = orderFaces(faces).filter((f) => !exclude.includes(f.id));
+  const chosen = [];
+  const seen = new Set();
+  const take = (f) => {
+    chosen.push(f);
+    seen.add(f.id);
+  };
+  const expressions = new Set();
+  for (const f of pool) {
+    if (chosen.length >= count) break;
+    if (f.labels.expression !== avoidExpression && !expressions.has(f.labels.expression)) {
+      expressions.add(f.labels.expression);
+      take(f);
+    }
+  }
+  for (const f of pool) {
+    if (chosen.length >= count) break;
+    if (!seen.has(f.id) && !expressions.has(f.labels.expression)) {
+      expressions.add(f.labels.expression);
+      take(f);
+    }
+  }
+  for (const f of pool) {
+    if (chosen.length >= count) break;
+    if (!seen.has(f.id)) take(f);
+  }
+  return chosen;
 }

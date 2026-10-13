@@ -106,7 +106,7 @@ export async function syncAssets(store, id) {
     // use_face copies a pack face in under a name only it makes.
     const face = FACE_ASSET.exec(name);
     if (face) {
-      fresh.push({ name, kind: "face", width: info.width, height: info.height, from: null, faceId: face[1], mirrored: Boolean(face[2]) });
+      fresh.push({ name, kind: "face", width: info.width, height: info.height, from: null, faceId: face[1], mirrored: Boolean(face[2]), ...(face[3] ? { sticker: true } : {}) });
       continue;
     }
     const cut = /^(.+)-cutout(?:-\d+)?\.png$/.exec(name);
@@ -133,9 +133,11 @@ export async function registerCutout(store, id, { name, width, height, from }) {
 }
 
 /** Registers a pack face that was copied into assets/ (by use_face, or by a concept set before its turn). */
-export async function registerFace(store, id, { name, width, height, faceId, mirrored = false }) {
+export async function registerFace(store, id, { name, width, height, faceId, mirrored = false, stamp, sticker, display }) {
   await store.mutate(id, (project) => {
     project.assets = project.assets.filter((a) => a.name !== name);
-    project.assets.push({ name, kind: "face", width, height, from: null, faceId, mirrored });
+    // `stamp` (which pack file the copy came from, and its mtime) is how "Refresh faces" knows a copy is stale;
+    // `sticker` is the resolved outline, so a refresh bakes the same one again.
+    project.assets.push({ name, kind: "face", width, height, from: null, faceId, mirrored, ...(stamp ? { stamp } : {}), ...(sticker ? { sticker, ...(display ? { display } : {}) } : {}) });
   });
 }

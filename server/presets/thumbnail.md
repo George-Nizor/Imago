@@ -39,6 +39,7 @@ Detailed method is in `reference/craft/thumbnail/`. Read, with Read, before you 
   source is `pack`, and a person suits the idea, `find_faces` then `use_face` give you a cut-out of the owner's own face with
   the expression and gaze you ask for. Read the "Using the face pack" part of `face-finishing.md`.
   A reused face is fine; it may not stand in for a moment or a result the video does not have.
+- Outlines: a pack face gets its cream-and-ink outline from `use_face({id, sticker: true})`, not stacked `drop-shadow()` filters.
 - One thing is clearly biggest (the face or the object), a second reads next, the rest recedes.
   Subject on one side, text on the other, not both centred. Faces look toward the text. Crop tight
   and bleed off an edge.

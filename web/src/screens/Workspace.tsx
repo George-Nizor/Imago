@@ -8,8 +8,9 @@ import { Glyph, MenuButton, SeriesDialog } from "../library/ui.js";
 import { RenameInput } from "./Library.js";
 import { FeedView } from "./FeedView.js";
 import { Credits, FurtherBar, ModelBadge } from "../further.js";
+import { ExportsList, RefreshFacesBar, TryFacesDialog } from "../face-tools.js";
 import { creditLine } from "../further-lib.js";
-import { download, errorText, fmtSize, mb, navigate, runErrorText } from "../lib.js";
+import { download, errorText, fmtSize, hasPackFace, mb, navigate, runErrorText } from "../lib.js";
 import { PLATFORM_LABELS, type PlatformId } from "../api/types.js";
 import { EXPORT_FORMATS, EXPORT_SCALES, YOUTUBE_MOBILE_MAX_BYTES, allowedScales, presetUi } from "../presets.js";
 
@@ -33,6 +34,7 @@ export function Workspace({ id }: { id: string }) {
   const [run, setRun] = useState<Run>(IDLE);
   const [presets, setPresets] = useState<PresetInfo[]>([]);
   const [view, setView] = useState<"design" | "feed">("design");
+  const [exportsTick, setExportsTick] = useState(0);
 
   const reload = useCallback(() => {
     api.getProject(id).then(setProject).catch(() => {});
@@ -107,7 +109,8 @@ export function Workspace({ id }: { id: string }) {
   return (
     <div className="workspace">
       <section className="stage-col" aria-label="Preview">
-        <Toolbar project={project} run={run} onProject={setProject} />
+        <Toolbar project={project} run={run} onProject={setProject} onExported={() => setExportsTick((t) => t + 1)} />
+        <RefreshFacesBar project={project} running={run.running} onProject={setProject} />
         {project.preset === "thumbnail" && project.current ? <ViewTabs view={view} onView={setView} project={project} /> : null}
         {view === "feed" && project.preset === "thumbnail" && project.current ? (
           <div className="preview feed-scroll"><FeedView project={project} /></div>
@@ -115,6 +118,7 @@ export function Workspace({ id }: { id: string }) {
           <Preview project={project} run={run} />
         )}
         <Credits project={project} />
+        <ExportsList projectId={project.id} tick={exportsTick} />
         <VersionStrip project={project} disabled={run.running} onRestore={(n) => api.restore(id, n).then(setProject).catch((e) => setRun((r) => ({ ...r, error: errorText(e), detail: "" })))} />
       </section>
       <Chat
@@ -150,12 +154,13 @@ function ViewTabs({ view, onView, project }: { view: "design" | "feed"; onView: 
   );
 }
 
-function Toolbar({ project, run, onProject }: { project: Project; run: Run; onProject: (p: Project) => void }) {
+function Toolbar({ project, run, onProject, onExported }: { project: Project; run: Run; onProject: (p: Project) => void; onExported: () => void }) {
   const toast = useToast();
   const { series, refresh } = useSeries();
   const deleteWithUndo = useDeleteWithUndo();
   const [renaming, setRenaming] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [tryingFaces, setTryingFaces] = useState(false);
   const seriesName = project.series ? series.find((s) => s.id === project.series)?.name : undefined;
 
   const patch = (change: { title?: string; starred?: boolean; series?: string | null }) =>
@@ -220,9 +225,15 @@ function Toolbar({ project, run, onProject }: { project: Project; run: Run; onPr
         <button type="button" className={`icon-btn star-btn ${project.starred ? "on" : ""}`} aria-pressed={project.starred === true} aria-label={project.starred ? "Remove star" : "Star this design"} onClick={() => void patch({ starred: !project.starred })}>
           <Glyph name={project.starred ? "star-fill" : "star"} size={22} />
         </button>
+        {project.preset === "thumbnail" && hasPackFace(project) && (
+          <Btn icon="sparkle" disabled={run.running || !project.current} onClick={() => setTryingFaces(true)} title="The same design with other faces from your pack, side by side">
+            Try other faces
+          </Btn>
+        )}
         <MenuButton label="More actions" items={items} />
-        <ExportMenu project={project} disabled={run.running || !project.current} />
+        <ExportMenu project={project} disabled={run.running || !project.current} onExported={onExported} />
       </div>
+      {tryingFaces && <TryFacesDialog project={project} onClose={() => setTryingFaces(false)} />}
       {moving && (
         <SeriesDialog
           count={1}
@@ -305,7 +316,7 @@ function VersionStrip({ project, disabled, onRestore }: { project: Project; disa
   );
 }
 
-function ExportMenu({ project, disabled }: { project: Project; disabled: boolean }) {
+function ExportMenu({ project, disabled, onExported }: { project: Project; disabled: boolean; onExported: () => void }) {
   const [open, setOpen] = useState(false);
   const thumb = project.preset === "thumbnail";
   const vertical = thumb && project.size.width === 720 && project.size.height === 1280;
@@ -332,16 +343,25 @@ function ExportMenu({ project, disabled }: { project: Project; disabled: boolean
 
   const scaleLabel = (s: number) => (thumb && s === 1.5 ? "1080p" : thumb && s === 3 ? "4K, YouTube's recommended size" : `${s}×`);
 
+  /** One click: the 3x JPG, saved in the project's exports under its title, and downloaded. */
+  async function quick() {
+    setState({ busy: true, note: "", bad: false });
+    try {
+      const r = await api.quickExport(project.id);
+      download(r.url, r.name);
+      onExported();
+      setState({ busy: false, note: `${r.name} · ${r.width}×${r.height} · ${mb(r.bytes)}`, bad: false, ...(r.overBudget ? { warn: "Still over 2 MB at the lowest quality; fine on desktop, too big for the YouTube mobile app." } : {}) });
+    } catch (e) {
+      setState({ busy: false, note: errorText(e), bad: true });
+    }
+  }
+
   async function go() {
     setState({ busy: true, note: "", bad: false });
     try {
       const r = await api.exportProject(project.id, { format, scale });
-      const a = document.createElement("a");
-      a.href = r.url;
-      a.download = r.name;
-      document.body.append(a);
-      a.click();
-      a.remove();
+      download(r.url, r.name);
+      onExported();
       const big = thumb && r.bytes > YOUTUBE_MOBILE_MAX_BYTES;
       const warn = big
         ? `Over 2 MB: too big for the YouTube mobile app, fine on desktop (50 MB).${format === "png" ? " Choose JPG for a smaller file." : ""}`
@@ -359,6 +379,11 @@ function ExportMenu({ project, disabled }: { project: Project; disabled: boolean
       </Btn>
       {open && (
         <div className="popover" role="dialog" aria-label="Export">
+          <Btn variant="primary" icon="export" disabled={state.busy} onClick={quick} title="Saves a JPG at the largest size up to 3× in this project's exports, named after its title, and downloads it">
+            {state.busy ? "Exporting…" : thumb ? "Export 4K JPG" : "Export 3× JPG"}
+          </Btn>
+          <span className="small muted">Saved with the project, named after its title.</span>
+          <span className="label">Or choose</span>
           <span className="label">Format</span>
           <div className="seg" role="radiogroup" aria-label="Format">
             {EXPORT_FORMATS.map((f) => (

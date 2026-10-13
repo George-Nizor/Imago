@@ -17,3 +17,4 @@ import "./faces.test.mjs";
 import "./brands.test.mjs";
 import "./face-source.test.mjs";
 import "./face-retouch.test.mjs";
+import "./uplift.test.mjs";

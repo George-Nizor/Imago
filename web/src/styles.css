@@ -484,15 +484,16 @@ input:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent); 
 .faces-retouch { display: flex; flex-direction: column; gap: 10px; }
 .faces-retouch-row { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; padding: 0 4px; }
 .strength { flex: 1; min-width: 200px; max-width: 360px; }
-.strength input[type="range"], .compare input[type="range"] { accent-color: var(--accent); width: 100%; min-height: 28px; }
+.strength input[type="range"], .ba-compare input[type="range"] { accent-color: var(--accent); width: 100%; min-height: 28px; }
 .face-retouch-edit { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
 .face-retouch-edit legend { padding: 0 6px; font-weight: 600; font-size: 0.875rem; }
 .face-retouch-reset { align-self: flex-start; min-height: 32px; padding: 4px 10px; font-size: 0.8125rem; }
-.compare { position: relative; border-radius: 10px; overflow: hidden; background: var(--stage); line-height: 0; }
-.compare img { width: 100%; display: block; }
-.compare .compare-after { position: absolute; inset: 0; height: 100%; object-fit: contain; border-radius: 0; }
+/* The retouch before/after slider. (Named apart from the compare screen, whose root is also .compare.) */
+.ba-compare { position: relative; border-radius: 10px; overflow: hidden; background: var(--stage); line-height: 0; }
+.ba-compare img { width: 100%; display: block; }
+.ba-compare .compare-after { position: absolute; inset: 0; height: 100%; object-fit: contain; border-radius: 0; }
 .compare-line { position: absolute; top: 0; bottom: 28px; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; }
-.compare input[type="range"] { position: relative; display: block; margin: 0; }
+.ba-compare input[type="range"] { position: relative; display: block; margin: 0; }
 .compare-tag { position: absolute; top: 8px; padding: 2px 8px; border-radius: 6px; font: 600 0.75rem var(--ui); line-height: 1.4; background: var(--bg); border: 1px solid var(--line); pointer-events: none; }
 .compare-tag.is-before { left: 8px; }
 .compare-tag.is-after { right: 8px; color: var(--accent-text); }
@@ -548,3 +549,23 @@ input:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent); 
 .asset-add { display: flex; gap: 6px; flex-wrap: wrap; }
 .asset-add input[type="text"], .asset-add input:not([type]) { flex: 1; min-width: 120px; }
 .series-chip.brand-chip { margin-top: 0; }
+
+/* Refresh faces, try other faces, title tests and the exports list */
+.refresh-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 24px 8px; padding: 8px 12px; border: 1px solid color-mix(in oklab, var(--accent) 45%, transparent); border-radius: 12px; background: var(--raised); }
+.refresh-bar .spinner { width: 16px; height: 16px; border-width: 2px; }
+.face-pick { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; max-height: 280px; overflow: auto; }
+.face-pick-item { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; padding: 6px; font: inherit; color: inherit; background: var(--raised); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.face-pick-item img { width: 100%; aspect-ratio: 4 / 5; object-fit: contain; background: var(--stage); border-radius: 6px; }
+.face-pick-item:hover { border-color: var(--accent); }
+.face-pick-item.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.face-usage { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.face-usage legend { font-weight: 600; font-size: 0.875rem; padding: 0 4px; }
+.exports-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.exports-list .btn { min-height: 28px; padding: 2px 8px; font-size: 0.8125rem; }
+.variants-source { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.variants-source img { width: auto; max-width: 160px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+.variant-face { display: flex; align-items: center; gap: 8px; margin: 0; }
+.variant-face img { height: 40px; width: 32px; object-fit: contain; background: var(--stage); border-radius: 6px; }
+.titles-field .title-row { display: flex; gap: 8px; align-items: center; }
+.titles-field .title-row input { flex: 1; }
+.titles-field > .btn { align-self: flex-start; }

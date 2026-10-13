@@ -6,11 +6,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadConfig, packageVersion } from "./config.mjs";
-import { computeChecks } from "./checks.mjs";
 import { cutOut } from "./cutout.mjs";
-import { highestVersion, validateDesignFile } from "./design-files.mjs";
-import { stageFeed } from "./feed.mjs";
-import { renderHtml } from "./renderer.mjs";
+import { renderVersion } from "./render-version.mjs";
 import { fetchStockImage, searchImages } from "./stock.mjs";
 import { EXPRESSIONS, GAZES, GESTURES, GRADES, availability, faceImageFile, facesRoot, rankFaces, readAllFaces, readSettings, summarize, takeFace } from "./face-pack.mjs";
 import { renderFaceSheet } from "./face-sheet.mjs";
@@ -30,33 +27,20 @@ server.registerTool(
   async () => {
     try {
       if (!process.env.IMAGO_PROJECT_DIR || !(size.width > 0 && size.height > 0)) return text("The render tool is not configured for a project.", true);
-      const { errors, warnings } = await validateDesignFile(projectDir, size, config.fontsDir);
-      if (errors.length) return text(`design.html has errors; fix them and render again:\n${errors.map((e) => `- ${e}`).join("\n")}`, true);
-      const version = (await highestVersion(projectDir)) + 1;
-      const snapshot = path.join(projectDir, "versions", `v${version}.html`);
-      const out = path.join(projectDir, "renders", `v${version}.png`);
-      await fs.copyFile(path.join(projectDir, "design.html"), snapshot);
-      // Thumbnails are also judged in context: measured, then shown in a feed. Neither can fail the render.
-      const judged = process.env.IMAGO_PRESET === "thumbnail";
-      const feedOut = path.join(projectDir, "renders", `v${version}-feed.png`);
-      const staged = judged ? await stageFeed({ config, format: process.env.IMAGO_FORMAT || "video", title: process.env.IMAGO_BRIEF_TITLE ?? "", projectId: path.basename(projectDir), conceptSetId: process.env.IMAGO_CONCEPT_SET || null, outFile: feedOut }).catch(() => null) : null;
-      let result;
-      try {
-        // Rendered from design.html itself so relative assets/ paths resolve; the snapshot is identical.
-        result = await renderHtml(config, { htmlFile: path.join(projectDir, "design.html"), ...size, scale: 1, format: "png", out, measure: judged, feedJob: staged?.jobFile });
-      } finally {
-        await staged?.cleanup();
-      }
-      const content = [{ type: "image", data: (await fs.readFile(out)).toString("base64"), mimeType: "image/png" }];
-      if (result.feed) content.push({ type: "image", data: (await fs.readFile(feedOut)).toString("base64"), mimeType: "image/png" });
-      const reply = { version, warnings };
-      if (judged && result.measure) {
-        try {
-          reply.checks = computeChecks({ format: process.env.IMAGO_FORMAT || "video", title: process.env.IMAGO_BRIEF_TITLE ?? "", measure: result.measure, neighbours: { labs: (result.feed?.neighbours ?? []).map((n) => n.meanLab), source: staged?.source } });
-        } catch {
-          reply.checks = [];
-        }
-      }
+      const rendered = await renderVersion(config, {
+        dir: projectDir,
+        size,
+        preset: process.env.IMAGO_PRESET,
+        format: process.env.IMAGO_FORMAT || "video",
+        title: process.env.IMAGO_BRIEF_TITLE ?? "",
+        id: path.basename(projectDir),
+        conceptSetId: process.env.IMAGO_CONCEPT_SET || null,
+      });
+      if (rendered.errors) return text(`design.html has errors; fix them and render again:\n${rendered.errors.map((e) => `- ${e}`).join("\n")}`, true);
+      const content = [{ type: "image", data: (await fs.readFile(rendered.image)).toString("base64"), mimeType: "image/png" }];
+      if (rendered.feed) content.push({ type: "image", data: (await fs.readFile(rendered.feed)).toString("base64"), mimeType: "image/png" });
+      const reply = { version: rendered.version, warnings: rendered.warnings };
+      if (rendered.checks) reply.checks = rendered.checks;
       return { content: [...content, { type: "text", text: JSON.stringify(reply) }] };
     } catch (error) {
       return text(`The render failed: ${error.message}`, true);
@@ -163,16 +147,23 @@ server.registerTool(
 server.registerTool(
   "use_face",
   {
-    description: "Copy a face from the owner's face pack into assets/ as face-<id>.png (a transparent cut-out, ready to place; it arrives already retouched: balanced, brightened, skin smoothed and sharpened, so do not stack heavy CSS filters on it, only light grading to match the scene) or, with mirror, as face-<id>-mirrored.png with the pixels flipped. Refused when mirroring is not allowed for that face. Returns the name and size.",
+    description:
+      "Copy a face from the owner's face pack into assets/ as face-<id>.png (a transparent cut-out, at most 2400 px on its long side, ready to place; it arrives already retouched: balanced, brightened, skin smoothed and sharpened, so do not stack heavy CSS filters on it, only light grading to match the scene) or, with mirror, as face-<id>-mirrored.png with the pixels flipped. With sticker, the cream-and-ink sticker outline is baked into the PNG as face-<id>[-mirrored]-sticker.png (use it instead of stacking drop-shadow() filters: it is much faster to render; keep one hard drop-shadow in CSS for lift). Refused when mirroring is not allowed for that face. Returns the name and size; with sticker also `display`: the width and height in CSS px to give the image so the face keeps the size it has at the sticker's displayWidth, and the offset to subtract from its left and top because the outline adds a margin all round.",
     inputSchema: {
       id: z.string().describe("A face id from find_faces"),
       mirror: z.boolean().optional().describe("Flip it left to right so it looks toward the other side"),
+      sticker: z
+        .union([z.boolean(), z.object({ cream: z.string().optional(), ink: z.string().optional(), displayWidth: z.number().optional() })])
+        .optional()
+        .describe("Bake a sticker outline. cream and ink are hex colours (default: the brand's light and ink colours); displayWidth is the width in CSS px the design shows the face at (default 800); the cream band is 8 CSS px and the ink band reaches 13"),
     },
   },
-  async ({ id, mirror }) => {
+  async ({ id, mirror, sticker }) => {
     try {
       if (!process.env.IMAGO_PROJECT_DIR || !process.env.IMAGO_DATA_DIR) return text("The tool is not configured for a project.", true);
-      return text(await takeFace(process.env.IMAGO_DATA_DIR, projectDir, id, { mirror: mirror === true }));
+      const made = await takeFace(process.env.IMAGO_DATA_DIR, projectDir, id, { mirror: mirror === true, sticker: sticker ?? false });
+      // The reply keeps `stamp` and the resolved `sticker`: the server reads them back to register the copy.
+      return text(made);
     } catch (error) {
       return text(`use_face failed: ${error.message}`, true);
     }

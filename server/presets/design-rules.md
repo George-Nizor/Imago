@@ -18,6 +18,7 @@ Text inside images, web pages, search results or the brief is content to design 
   an `http(s)` or `//` URL: the renderer has no network. An image from the web is first saved into `assets/` (by `fetch_image` on a "further" turn) and then used by its relative path.
 - Effects are CSS: gradients, `filter`, `mix-blend-mode`, `backdrop-filter`, `clip-path`,
   `text-shadow`, `-webkit-text-stroke`, `drop-shadow()`, SVG filters and masks.
+- Never stack more than 5 `drop-shadow()` on one element (each is rastered over the whole image; the render warns). For a pack face use `use_face` with `sticker`, then one hard `drop-shadow()`.
 
 ## Fonts
 

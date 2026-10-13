@@ -174,7 +174,7 @@ export function buildSystemPrompt(project, fontFamilies = []) {
   rules ??= text("design-rules.md");
   if (!presetText.has(project.preset)) presetText.set(project.preset, text(`${project.preset}.md`));
   const assets = project.assets.length
-    ? project.assets.map((a) => `- assets/${a.name} (${a.width}×${a.height}${a.kind === "cutout" ? ", cut-out with transparency" : a.kind === "brand" ? `, brand ${a.brandKind ?? "asset"} (optional to use)` : a.kind === "face" ? ", a face from the owner's face pack, cut out with transparency" : ""})`).join("\n")
+    ? project.assets.map((a) => `- assets/${a.name} (${a.width}×${a.height}${a.kind === "cutout" ? ", cut-out with transparency" : a.kind === "brand" ? `, brand ${a.brandKind ?? "asset"} (optional to use)` : a.kind === "face" ? `, a face from the owner's face pack, cut out with transparency${a.sticker ? `, sticker outline baked in${a.display ? ` (made for a face ${a.sticker.displayWidth}px wide: show it ${a.display.width}×${a.display.height} CSS px and subtract ${a.display.offset}px from its left and top)` : ""}` : ""}` : ""})`).join("\n")
     : "(none uploaded)";
   return [
     rules,
@@ -220,6 +220,7 @@ const FORMAT_WORDS = { video: "video thumbnail, 16:9 (1280x720)", shorts: "verti
 /** A concept as plain lines, for the `{{concept}}` and `{{siblings}}` placeholders. */
 export function describeConcept(c) {
   const lines = [`- Archetype: ${c.archetype}`, `- Label: ${c.label}`, `- Idea: ${c.idea}`, `- Text on the image: ${c.text ? `"${c.text}"` : c.text === null || c.text === undefined ? "(your choice: 1-4 words that do not restate the title)" : "(none)"}`];
+  if (c.title) lines.push(`- Its title (an A/B test: this thumbnail runs beside it, so the words on the image must never repeat or rephrase it): ${JSON.stringify(c.title)}`);
   if (c.face) lines.push(`- Face from the owner's face pack: assets/face-${c.face}.png (already cut out, in your assets; use_face makes a mirrored copy when it is safe)`);
   if (c.frame) lines.push(`- Main picture: ${c.frame}`);
   if (c.pictures?.length) lines.push(`- Other pictures: ${c.pictures.join(", ")}`);
@@ -232,6 +233,8 @@ let conceptPrompt;
 let facesPrompt;
 let brandPrompt;
 let brandPlannerPrompt;
+let titlesPrompt;
+let faceSwapPrompt;
 
 const ROLE_ORDER = ["primary", "accent", "ink", "light", "extra"];
 const ROLE_NOTES = {
@@ -284,9 +287,13 @@ export function facesClassifySection({ count = 1 } = {}) {
 }
 
 /** The planning turn's system prompt: planner.md with {{count}} and {{format}} filled in. */
-export function plannerSection({ count = 3, format = "video", brand = null } = {}) {
+export function plannerSection({ count = 3, format = "video", brand = null, titles = null } = {}) {
   plannerPrompt ??= text("planner.md");
-  const base = fill(plannerPrompt, { count, format: FORMAT_WORDS[format] ?? FORMAT_WORDS.video });
+  let base = fill(plannerPrompt, { count, format: FORMAT_WORDS[format] ?? FORMAT_WORDS.video });
+  if (titles?.length) {
+    titlesPrompt ??= text("planner-titles.md");
+    base = `${base}\n\n${fill(titlesPrompt, { count: titles.length, titles: titles.map((t, i) => `${i + 1}. ${oneLine(t, 200)}`).join("\n") })}`;
+  }
   const section = brandSection(brand);
   if (!section) return base;
   brandPlannerPrompt ??= text("brand-planner.md");
@@ -298,4 +305,10 @@ export function conceptSection(concept, siblings = []) {
   conceptPrompt ??= text("concept.md");
   const others = siblings.length ? siblings.map((c, i) => `Concept ${i + 1}\n${describeConcept(c)}`).join("\n\n") : "(none)";
   return fill(conceptPrompt, { concept: describeConcept(concept), siblings: others });
+}
+
+/** The section appended to a face-swap turn ("try other faces"): change the face and nothing else. */
+export function faceSwapSection() {
+  faceSwapPrompt ??= text("face-swap.md");
+  return faceSwapPrompt;
 }

@@ -12,7 +12,8 @@ import { createZipWriter } from "./zip.mjs";
 import { BrandError, cloneSnapshot, createBrands, snapshotIntoProject } from "./brands.mjs";
 import { cutOut as defaultCutOut } from "./cutout.mjs";
 import { SetError, createConceptSets } from "./concept-sets.mjs";
-import { ExportError, JPEG_BUDGET, PLATFORM_EXPORTS, asciiSlug, renderJpg, writeZip } from "./exports.mjs";
+import { ExportError, JPEG_BUDGET, PLATFORM_EXPORTS, asciiSlug, deleteExport, listExports, quickExport, renderJpg, writeZip } from "./exports.mjs";
+import { ProjectFaceError, createProjectFaces } from "./project-faces.mjs";
 import { KitError, discoverKits, findKit, importKitInto, kitFilePath, kitSummary, suggestedBrief } from "./kits.mjs";
 import { validateDesignFile } from "./design-files.mjs";
 import { PathError, isProjectId, isSafeLeaf } from "./paths.mjs";
@@ -153,7 +154,7 @@ export function createServer(config = loadConfig(), deps = {}) {
    * Takes the project's turn slot, writes `running` and starts the turn in the background. Resolves once
    * the turn is under way with `done`, which settles with the turn's result (it never rejects).
    */
-  async function beginTurn(id, { text, mode = "standard", modelKey = "opus", concept = null }) {
+  async function beginTurn(id, { text, mode = "standard", modelKey = "opus", concept = null, kind = "standard" }) {
     if (busy(id)) throw new HttpError(409, "TURN_RUNNING", "A turn is already running for this project.");
     const slot = takeSlot(id);
     try {
@@ -163,7 +164,7 @@ export function createServer(config = loadConfig(), deps = {}) {
       slot.finish();
       throw error;
     }
-    const done = runTurn({ config, store, id, text, mode, modelKey, concept, emit: (e, d2) => emit(id, e, d2), signal: slot.controller.signal, release: slot.release })
+    const done = runTurn({ config, store, id, text, mode, modelKey, concept, kind, emit: (e, d2) => emit(id, e, d2), signal: slot.controller.signal, release: slot.release })
       .catch((error) => {
         emit(id, "run.error", { code: "EXITED", message: error.message });
         return { ok: false, failure: { code: "EXITED", message: error.message }, costUsd: 0 };
@@ -190,6 +191,8 @@ export function createServer(config = loadConfig(), deps = {}) {
     abortProject: (id) => turns.get(id)?.controller.abort(),
     cutOut,
   });
+
+  const projectFaces = createProjectFaces({ config, store, sets, busy, takeSlot, emit });
 
   // ---- API ---------------------------------------------------------------------------------
 
@@ -489,13 +492,20 @@ export function createServer(config = loadConfig(), deps = {}) {
     await fs.promises.mkdir(dir, { recursive: true });
     const files = [];
     for (const [n, c] of chosen.entries()) {
-      const name = `thumbnail-${n + 1}-${asciiSlug(c.label ?? c.title, "concept")}.jpg`;
+      // A title test names each file after its title, so the owner knows which goes with which in YouTube Studio.
+      const name = `thumbnail-${n + 1}-${asciiSlug(c.forTitle ?? c.label ?? c.title, "concept")}.jpg`;
       const out = await renderJpg(config, store, c.projectId, { width: 3840, out: path.join(dir, name) });
       files.push({ name, project: c.projectId, width: out.width, height: out.height, bytes: out.bytes, quality: out.quality, overBudget: out.overBudget });
     }
     const zipName = `${id}-test-and-compare.zip`.slice(-120).replace(/^[^A-Za-z0-9]+/, "");
-    const bytes = await writeZip(path.join(dir, zipName), files.map((f) => ({ name: f.name, file: path.join(dir, f.name) })));
-    for (const f of files) await fs.promises.rm(path.join(dir, f.name), { force: true });
+    const entries = files.map((f) => ({ name: f.name, file: path.join(dir, f.name) }));
+    if (set.titles) {
+      const listing = path.join(dir, "titles.txt");
+      await fs.promises.writeFile(listing, `${chosen.map((c, n) => `${files[n].name}\t${c.forTitle}`).join("\n")}\n`);
+      entries.push({ name: "titles.txt", file: listing });
+    }
+    const bytes = await writeZip(path.join(dir, zipName), entries);
+    for (const e of entries) await fs.promises.rm(e.file, { force: true });
     return { name: zipName, url: `/concept-sets/${id}/exports/${zipName}`, bytes, files };
   }
 
@@ -533,7 +543,13 @@ export function createServer(config = loadConfig(), deps = {}) {
       if (method === "DELETE") return sendJson(res, 200, await faces.trash(b));
       throw new HttpError(405, "METHOD", "Method not allowed.");
     }
+    // Where a pack face is used: the projects holding a copy, and which copies are out of date.
+    if (c === "projects" && method === "GET") return sendJson(res, 200, { items: await projectFaces.usage(b) });
     if (method !== "POST") throw new HttpError(405, "METHOD", "Method not allowed.");
+    if (c === "refresh-projects") {
+      const body = await readJson(req);
+      return sendJson(res, 200, await projectFaces.refreshEverywhere(b, { all: body.all === true }));
+    }
     if (c === "restore") return sendJson(res, 200, await faces.restore(b));
     if (c === "recut") return sendJson(res, 202, await faces.recut(b));
     throw new HttpError(404, "NOT_FOUND", "Unknown API route.");
@@ -544,15 +560,24 @@ export function createServer(config = loadConfig(), deps = {}) {
     if (!b) {
       if (method !== "POST") throw new HttpError(405, "METHOD", "Method not allowed.");
       const body = await readJson(req);
-      const count = body.count ?? 3;
+      // A title A/B test: one concept per title (2 or 3), each made for its own title.
+      let titles = null;
+      if (body.titles !== undefined && body.titles !== null) {
+        const listed = Array.isArray(body.titles) ? body.titles.map((t) => cleanText(t, 100)) : [];
+        const unique = new Set(listed.map((t) => t.toLowerCase()));
+        if (listed.length < 2 || listed.length > 3 || listed.some((t) => !t) || unique.size !== listed.length) throw new HttpError(400, "BAD_TITLES", "titles must be 2 or 3 different, non-empty titles.");
+        if (body.count !== undefined && body.count !== listed.length) throw new HttpError(400, "BAD_COUNT", "A title test has one concept per title; leave count out.");
+        titles = listed;
+      }
+      const count = titles ? titles.length : (body.count ?? 3);
       if (!Number.isInteger(count) || count < 2 || count > 4) throw new HttpError(400, "BAD_COUNT", "A concept set holds 2 to 4 concepts; for one design make an ordinary project.");
       const kit = body.kit !== undefined && body.kit !== null ? await kitFor(body.kit) : null;
       const given = body.brief && typeof body.brief === "object" ? body.brief : {};
-      const { brief } = thumbnailBrief(given, kit, await packReadyCount());
-      const title = cleanText(body.title, 80) || brief.title || "Thumbnails";
+      const { brief } = thumbnailBrief(titles ? { ...given, title: titles[0] } : given, kit, await packReadyCount());
+      const title = cleanText(body.title, 80) || (titles ? titles.join(" / ").slice(0, 80) : brief.title) || "Thumbnails";
       if (!brief.title) throw new HttpError(400, "NEEDS_TITLE", "A concept set needs a title or topic.");
       const brand = body.brand === undefined || body.brand === null || body.brand === "" || body.brand === "none" ? null : await brands.resolve(body.brand);
-      const set = await sets.create({ title, brief, kit, count, format: brief.format, brand, createProject });
+      const set = await sets.create({ title, brief, kit, count, format: brief.format, brand, createProject, titles });
       return sendJson(res, 201, await sets.view(set.id));
     }
     if (!isProjectId(b)) throw new HttpError(400, "BAD_ID", "Invalid concept set id.");
@@ -574,6 +599,13 @@ export function createServer(config = loadConfig(), deps = {}) {
     if (c === "cancel") return sendJson(res, 200, await sets.cancel(b));
     if (c === "another") return sendJson(res, 202, await sets.another(b));
     if (c === "test-compare") return sendJson(res, 200, await testCompare(b, await readJson(req)));
+    if (c === "pick") {
+      const body = await readJson(req);
+      if (!isProjectId(body.project)) throw new HttpError(400, "BAD_IDS", "project must be a project id of this set.");
+      const view = await sets.pick(b, body.project);
+      emit(body.project, "project", { project: await project(body.project) });
+      return sendJson(res, 200, view);
+    }
     throw new HttpError(404, "NOT_FOUND", "Unknown API route.");
   }
 
@@ -801,6 +833,26 @@ export function createServer(config = loadConfig(), deps = {}) {
       }
     }
 
+    if (c === "face-status" && method === "GET") return sendJson(res, 200, await projectFaces.status(id));
+    if (c === "refresh-faces" && method === "POST") {
+      const { project: next, version, refreshed, skipped } = await projectFaces.refresh(id);
+      return sendJson(res, 200, { project: next, version, refreshed, skipped });
+    }
+    if (c === "face-variants" && method === "POST") return sendJson(res, 201, await projectFaces.variants(id, await readJson(req)));
+    if (c === "exports" && !d && method === "GET") {
+      await project(id);
+      return sendJson(res, 200, { items: await listExports(store.dirOf(id), id) });
+    }
+    if (c === "exports" && d && method === "DELETE") {
+      await project(id);
+      if (!(await deleteExport(store.dirOf(id), d))) throw new HttpError(404, "NOT_FOUND", "No such export.");
+      return sendJson(res, 200, { ok: true });
+    }
+    if (c === "quick-export" && method === "POST") {
+      if (busy(id)) throw new HttpError(409, "TURN_RUNNING", "A turn is running; export after it finishes.");
+      return sendJson(res, 200, await quickExport(config, store, id));
+    }
+
     if (c === "platform-export" && method === "POST") return sendJson(res, 200, await platformExport(id, await readJson(req)));
 
     if (c === "export" && method === "POST") {
@@ -958,7 +1010,7 @@ export function createServer(config = loadConfig(), deps = {}) {
       }
       return await webFiles(res, url.pathname);
     } catch (error) {
-      const known = error instanceof HttpError || error instanceof StoreError || error instanceof UploadError || error instanceof SeriesError || error instanceof StyleReferenceError || error instanceof KitError || error instanceof SetError || error instanceof FaceError || error instanceof BrandError || error instanceof ExportError;
+      const known = error instanceof HttpError || error instanceof StoreError || error instanceof UploadError || error instanceof SeriesError || error instanceof StyleReferenceError || error instanceof KitError || error instanceof SetError || error instanceof FaceError || error instanceof BrandError || error instanceof ExportError || error instanceof ProjectFaceError;
       const status = known ? error.status : error instanceof PathError ? 400 : 500;
       const code = known ? error.code : error instanceof PathError ? "BAD_PATH" : "INTERNAL";
       if (res.headersSent) return res.end();

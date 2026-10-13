@@ -13,6 +13,11 @@ import type {
   Check,
   ConceptSetView,
   ConceptView,
+  ExportFile,
+  FaceStatus,
+  FaceUsage,
+  QuickExport,
+  RefreshResult,
   CreateBody,
   CreateSetBody,
   FaceLabels,
@@ -147,6 +152,8 @@ function seed(title: string, preset: Project["preset"], versions: number, ageMin
   projects.set(id, p);
 }
 seed("Rocket launch thumbnail", "thumbnail", 3, 25);
+// A pack face in the first design, so Refresh faces and Try other faces can be tried.
+projects.values().next().value!.assets.push({ name: "face-00000001-sticker.png", kind: "face", faceId: "00000001", mirrored: false, sticker: true, width: 2393, height: 1814, from: null });
 seed("Why I quit my job", "thumbnail", 2, 60 * 3);
 seed("Budget gaming PC build", "thumbnail", 1, 60 * 8);
 seed("Beach sunset retouch", "photo", 2, 60 * 5);
@@ -288,6 +295,8 @@ const pushSet = (id: string) => {
   for (const fn of setListeners.get(id) ?? []) fn({ type: "set", set: structuredClone(v) });
 };
 const setCancelled = new Set<string>();
+const exportsOf = new Map<string, ExportFile[]>();
+const refreshedFaces = new Set<string>();
 async function designConcept(setId: string, c: ConceptView, delay: number) {
   const m = sets.get(setId)!;
   await wait(delay);
@@ -298,9 +307,9 @@ async function designConcept(setId: string, c: ConceptView, delay: number) {
   c.state = "designing";
   pushSet(setId);
   const p = projects.get(c.projectId)!;
-  const text = `Make concept ${c.index + 1}`;
+  const text = m.view.kind === "faces" ? `Change only the face. Replace assets/face-00000001-sticker.png with assets/face-${c.face}-sticker.png in design.html.` : `Make concept ${c.index + 1}`;
   p.messages.push({ role: "user", text, at: new Date().toISOString(), version: null });
-  p.title = `${m.view.title} · ${c.label}`;
+  if (!m.view.titles && m.view.kind !== "faces") p.title = `${m.view.title} · ${c.label}`;
   p.running = true;
   await runTurn(p, text);
   c.state = setCancelled.has(setId) ? "cancelled" : "done";
@@ -446,14 +455,16 @@ export const mockApi: Api = {
     const id = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}-${(++counter).toString(36)}s`;
     const format = (String(brief.format ?? kit?.suggested.format ?? "video")) as ConceptSetView["format"];
     const concepts: ConceptView[] = [];
-    for (let i = 0; i < body.count; i++) {
-      const made = await this.createProject({ preset: "thumbnail", title: `${title} · concept ${i + 1}`, brief: { ...brief, format }, brand: brand?.id });
+    const count = body.titles ? body.titles.length : (body.count ?? 3);
+    for (let i = 0; i < count; i++) {
+      const own = body.titles?.[i];
+      const made = await this.createProject({ preset: "thumbnail", title: own ?? `${title} · concept ${i + 1}`, brief: { ...brief, ...(own ? { title: own } : {}), format }, brand: brand?.id });
       const p = projects.get(made.id)!;
       p.conceptSet = { id, index: i, archetype: null, label: null };
-      concepts.push({ index: i, projectId: made.id, removed: false, state: "planning", error: null, archetype: null, label: null, idea: null, text: null, why: null, frame: null, title: p.title, current: 0, versionCount: 0, running: false, renderUrl: null, checks: { ok: 0, warn: 0, info: 0, warnings: [] }, progress: null });
+      concepts.push({ index: i, forTitle: own ?? null, projectId: made.id, removed: false, state: "planning", error: null, archetype: null, label: null, idea: null, text: null, why: null, frame: null, title: p.title, current: 0, versionCount: 0, running: false, renderUrl: null, checks: { ok: 0, warn: 0, info: 0, warnings: [] }, progress: null });
     }
     const now = new Date().toISOString();
-    const view: ConceptSetView = { id, title, format, state: "draft", createdAt: now, updatedAt: now, count: body.count, kit: kit ? { id: kit.id, title: kit.title } : null, brand: brand ? { id: brand.id, name: brand.name } : null, plan: { source: null, note: "" }, costUsd: 0, testCompare: format === "video", concepts };
+    const view: ConceptSetView = { id, title, format, titles: body.titles ?? null, state: "draft", createdAt: now, updatedAt: now, count, kit: kit ? { id: kit.id, title: kit.title } : null, brand: brand ? { id: brand.id, name: brand.name } : null, plan: { source: null, note: "" }, costUsd: 0, testCompare: format === "video", concepts };
     sets.set(id, { view, draftFiles: 0 });
     return structuredClone(view);
   },
@@ -512,6 +523,80 @@ export const mockApi: Api = {
       clearTimeout(t);
       set!.delete(onEvent);
     };
+  },
+  async quickExport(id) {
+    const p = need(id);
+    await wait(900);
+    const name = `${p.title.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "design"}-v${p.current ?? 1}.jpg`;
+    const list = (exportsOf.get(id) ?? []).filter((f) => f.name !== name);
+    const bytes = 1_420_000;
+    list.unshift({ name, url: URL.createObjectURL(new Blob(["mock jpg"], { type: "image/jpeg" })), bytes, at: new Date().toISOString(), kind: "image" });
+    exportsOf.set(id, list);
+    return { name, url: list[0]!.url, width: p.size.width * 3, height: p.size.height * 3, bytes, overBudget: false } satisfies QuickExport;
+  },
+  async listExports(id) {
+    return structuredClone(exportsOf.get(id) ?? []) as ExportFile[];
+  },
+  async deleteExport(id, name) {
+    exportsOf.set(id, (exportsOf.get(id) ?? []).filter((f) => f.name !== name));
+  },
+  async faceStatus(id) {
+    const p = need(id);
+    const ids = [...new Set(p.assets.filter((a) => a.kind === "face" && a.faceId).map((a) => a.faceId!))];
+    const faces = ids.map((fid) => ({ id: fid, state: refreshedFaces.has(`${id}:${fid}`) ? ("current" as const) : ("stale" as const), assets: p.assets.filter((a) => a.faceId === fid).map((a) => a.name) }));
+    return { faces, stale: faces.filter((f) => f.state === "stale").length } satisfies FaceStatus;
+  },
+  async refreshFaces(id) {
+    const p = need(id);
+    await wait(1600);
+    const refreshed = p.assets.filter((a) => a.kind === "face").map((a) => a.name);
+    for (const a of p.assets) if (a.faceId) refreshedFaces.add(`${id}:${a.faceId}`);
+    const n = addVersion(p);
+    p.versions.at(-1)!.note = "faces refreshed";
+    p.messages.push({ role: "assistant", text: `Refreshed the face from your face pack (${refreshed.join(", ")}). Nothing else changed.`, at: new Date().toISOString(), version: n });
+    touch(p);
+    return { project: strip(p), version: n, refreshed, skipped: [] } satisfies RefreshResult;
+  },
+  async faceUsage(faceId) {
+    return [...projects.values()].filter((p) => p.assets.some((a) => a.faceId === faceId)).map((p) => ({ id: p.id, title: p.title, stale: !refreshedFaces.has(`${p.id}:${faceId}`), busy: p.running })) satisfies FaceUsage[];
+  },
+  async refreshFaceEverywhere(faceId) {
+    const results = [];
+    for (const u of await this.faceUsage(faceId)) {
+      if (!u.stale) continue;
+      const r = await this.refreshFaces(u.id);
+      results.push({ id: u.id, title: u.title, ok: true, version: r.version });
+    }
+    return { results };
+  },
+  async faceVariants(id, body) {
+    const src = need(id);
+    const picks = body.faces ?? faces.filter((f) => f.stage === "ready" && !f.hidden && f.id !== "00000001").slice(0, body.count ?? 3).map((f) => f.id);
+    const setId = `${src.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}-${(++counter).toString(36)}v`;
+    const concepts: ConceptView[] = [];
+    for (const [i, fid] of picks.entries()) {
+      const pf = needFace(fid);
+      const label = `${pf.labels?.expression ?? "Other"} face`.replace(/^./, (c) => c.toUpperCase());
+      const copyId = `${src.id.replace(/-[a-z0-9]{3,5}$/, "")}-${(++counter).toString(36)}f`;
+      const now = new Date().toISOString();
+      const copy: MockProject = { ...structuredClone(src), id: copyId, title: `${src.title} · ${pf.labels?.expression ?? "other"} face`, createdAt: now, updatedAt: now, sessionId: null, starred: false, running: false, conceptSet: { id: setId, index: i, archetype: null, label } };
+      copy.assets = copy.assets.map((a) => (a.kind === "face" ? { ...a, name: `face-${fid}-sticker.png`, faceId: fid } : a));
+      projects.set(copyId, copy);
+      concepts.push({ index: i, forTitle: null, face: fid, faceThumb: pf.retouch.thumbUrl ?? pf.cutout.thumbUrl, projectId: copyId, removed: false, state: "waiting", error: null, archetype: null, label, idea: `The same design with the owner's ${pf.labels?.expression ?? "other"} face (looking ${pf.labels?.gaze ?? "camera"}).`, text: null, why: "Only the face changes.", frame: null, title: copy.title, current: copy.current ?? 0, versionCount: copy.versions.length, running: false, renderUrl: null, checks: { ok: 0, warn: 0, info: 0, warnings: [] }, progress: null });
+    }
+    const now = new Date().toISOString();
+    const view: ConceptSetView = { id: setId, kind: "faces", titles: null, picked: null, source: { projectId: id, removed: false, title: src.title, renderUrl: src.current ? src.renders[src.current]! : null }, title: `${src.title} · other faces`, format: "video", state: "designing", createdAt: now, updatedAt: now, count: concepts.length, kit: null, plan: { source: null, note: "" }, costUsd: 0, testCompare: true, concepts };
+    sets.set(setId, { view, draftFiles: 0 });
+    pushSet(setId);
+    void Promise.all(concepts.map((c, i) => designConcept(setId, c, i * 400)));
+    return structuredClone(view);
+  },
+  async pickConcept(setId, projectId) {
+    const m = sets.get(setId)!;
+    m.view.picked = projectId;
+    need(projectId).starred = true;
+    pushSet(setId);
+    return structuredClone(m.view);
   },
   async testCompare(id, ids) {
     await wait(900);

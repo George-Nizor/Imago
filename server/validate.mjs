@@ -60,6 +60,9 @@ function fontFamilies(value) {
     .filter((f) => f && !/^var\(/i.test(f));
 }
 
+/** More drop-shadow() filters than this on one element is a warning: each is rastered over the whole image (20 to 40 s for a 3000 px cut-out). */
+export const MAX_DROP_SHADOWS = 5;
+
 const isZero = (tokens) => tokens.length > 0 && tokens.every((t) => /^0+(\.0+)?(px|em|rem|%)?$/.test(t));
 
 /**
@@ -178,6 +181,17 @@ export function validateDesign(html, { width, height, fonts = [] }) {
     // Shorthand: the family list is whatever follows the size, at the end.
     const tail = m[1].replace(/^.*?\d+(?:\.\d+)?(?:px|pt|em|rem|%)(?:\s*\/\s*[\d.]+(?:px|pt|em|rem|%)?)?\s+/i, "");
     if (tail !== m[1]) for (const f of fontFamilies(tail)) if (!GENERIC_FAMILIES.has(f.toLowerCase()) && !known.has(f.toLowerCase())) warn(`Font family "${f}" is not in fonts.json and will fall back.`);
+  }
+  for (const rule of allCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = rule[1].trim().replace(/\s+/g, " ");
+    for (const [property, value] of declarations(rule[2])) {
+      if (property !== "filter" && property !== "-webkit-filter") continue;
+      const stacked = (value.match(/drop-shadow\s*\(/gi) ?? []).length;
+      if (stacked > MAX_DROP_SHADOWS) {
+        const owner = selector === "[style]" ? "An element's style attribute" : `"${selector.slice(0, 60)}"`;
+        warn(`${owner} stacks ${stacked} drop-shadow() filters (more than ${MAX_DROP_SHADOWS}): each one is rastered over the whole image, so the render can take 20 to 40 s. Bake the outline into a face with use_face {sticker}, or use fewer layers and keep one hard drop-shadow.`);
+      }
+    }
   }
   if (!sheetLinked && known.size && [...allCss.matchAll(/font-family\s*:\s*([^;}]+)/gi)].some((m) => fontFamilies(m[1]).some((f) => known.has(f.toLowerCase())))) {
     warn(`Content fonts are used but <link rel="stylesheet" href="${FONT_SHEET}"> is missing.`);

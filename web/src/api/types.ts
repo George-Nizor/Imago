@@ -9,6 +9,9 @@ export interface AssetInfo {
   kind: "upload" | "cutout" | "stock" | "reference" | "kit" | "face" | "brand";
   /** A face copied in from the face pack. */
   faceId?: string;
+  mirrored?: boolean;
+  /** A baked sticker outline: true, or the resolved colours and widths it was made with. */
+  sticker?: boolean | { cream: string; ink: string; displayWidth: number; creamPx: number; inkPx: number };
   /** A brand file copied in at creation (`brand-<name>`): its kind (logo, mascot, other) and the owner's note. */
   brandKind?: BrandAssetKind;
   note?: string;
@@ -54,6 +57,8 @@ export interface ProjectVersion {
   warnings: string[];
   /** Thumbnails only. */
   checks?: Check[];
+  /** Set on a version the server made without a turn ("faces refreshed"). */
+  note?: string;
 }
 export interface Project {
   schemaVersion: number;
@@ -203,6 +208,11 @@ export type ConceptState = "planning" | "waiting" | "designing" | "done" | "fail
 export type SetState = "draft" | "planning" | "designing" | "done" | "failed" | "cancelled";
 export interface ConceptView {
   index: number;
+  /** In a title A/B test: the title this concept's thumbnail goes with. */
+  forTitle?: string | null;
+  /** In a "try other faces" set: the pack face this copy uses, and its thumbnail. */
+  face?: string | null;
+  faceThumb?: string | null;
   projectId: string;
   removed: boolean;
   state: ConceptState;
@@ -223,6 +233,14 @@ export interface ConceptView {
 }
 export interface ConceptSetView {
   id: string;
+  /** "faces" is a "try other faces" set: the same design with a different face each. */
+  kind?: "concepts" | "faces";
+  /** The titles of an A/B test (2 or 3), else null. */
+  titles?: string[] | null;
+  /** The concept the owner picked (and starred), if any. */
+  picked?: string | null;
+  /** A "try other faces" set's original design. */
+  source?: { projectId: string; removed: boolean; title: string | null; renderUrl: string | null } | null;
   title: string;
   format: "video" | "shorts" | "podcast";
   state: SetState;
@@ -305,8 +323,42 @@ export interface CreateSetBody {
   brief: Record<string, string | string[]>;
   kit?: string;
   brand?: string | null;
-  /** 2 to 4. */
-  count: number;
+  /** 2 to 4; left out for a title test. */
+  count?: number;
+  /** A title A/B test: 2 or 3 titles, one concept each (`count` is then left out). */
+  titles?: string[];
+}
+/** What a face a project holds is doing next to the pack's copy. */
+export interface FaceStatus {
+  faces: { id: string; state: "current" | "stale" | "unavailable"; assets: string[]; reason?: string }[];
+  stale: number;
+}
+export interface RefreshResult {
+  project: Project;
+  version: number;
+  refreshed: string[];
+  skipped: { name: string; reason: string }[];
+}
+export interface FaceUsage {
+  id: string;
+  title: string;
+  stale: boolean;
+  busy: boolean;
+}
+export interface ExportFile {
+  name: string;
+  url: string;
+  bytes: number;
+  at: string;
+  kind: "image" | "zip";
+}
+export interface QuickExport {
+  name: string;
+  url: string;
+  width: number;
+  height: number;
+  bytes: number;
+  overBudget: boolean;
 }
 
 // ---- brands ----
@@ -494,6 +546,22 @@ export interface Api {
   testCompare(id: string, projects?: string[]): Promise<ZipExport>;
   /** Vertical covers per platform; one platform is a JPG, several a zip. */
   platformExport(id: string, platforms?: PlatformId[]): Promise<ZipExport>;
+  /** The 3x JPG of the current design, saved in the project's exports under its title. */
+  quickExport(id: string): Promise<QuickExport>;
+  listExports(id: string): Promise<ExportFile[]>;
+  deleteExport(id: string, name: string): Promise<void>;
+  /** Is the pack's copy of each face newer than this project's? */
+  faceStatus(id: string): Promise<FaceStatus>;
+  /** Re-copies the project's pack faces and renders a new version, without a Claude turn. */
+  refreshFaces(id: string): Promise<RefreshResult>;
+  /** The same design with other faces: `faces` (pack ids) or `count` (picked for you). Returns the compare set. */
+  faceVariants(id: string, body: { faces?: string[]; count?: number }): Promise<ConceptSetView>;
+  /** Stars the concept the owner chose; the others stay in the library. */
+  pickConcept(setId: string, projectId: string): Promise<ConceptSetView>;
+  /** The projects holding a copy of this pack face, and which are out of date. */
+  faceUsage(id: string): Promise<FaceUsage[]>;
+  /** Refreshes this face in the projects that hold an older copy. */
+  refreshFaceEverywhere(id: string): Promise<{ results: { id: string; title: string; ok: boolean; version?: number; error?: string }[] }>;
   listFaces(): Promise<FaceList>;
   uploadFace(file: File): Promise<FaceView>;
   patchFace(id: string, patch: FacePatch): Promise<FaceView>;

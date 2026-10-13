@@ -28,7 +28,7 @@ export const LIMITS = {
   blendsIn: 18,
 };
 
-const STOPWORDS = new Set("a an and the of to in on for with is are was be it this that at by or as from your you my our how why what".split(" "));
+export const STOPWORDS = new Set("a an and the of to in on for with is are was be it this that at by or as from your you my our how why what".split(" "));
 export const tokenize = (text) =>
   String(text ?? "")
     .toLowerCase()

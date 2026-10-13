@@ -39,7 +39,7 @@ whether or not the pack has anything in it; an empty pack says so).
   owner's machine and without changing the face's shape. Do not redo that work. Put no heavy
   `brightness()`, `contrast()`, `saturate()` or `blur()` on them (see "Lifting the face"); a pack face needs
   only a light grade to sit in the scene (a hue or a little brightness within about 5%), the sticker
-  outline and the rim light.
+  outline (`use_face` with `sticker`) and the rim light.
 
 When to use it: the face source is `pack` (the owner chose their pack's best quality; the video's face frames
 were not imported), the concept names a pack face, or the video has no better real frame of a person. With
@@ -83,21 +83,34 @@ A face from the pack is already lifted: skip this section for it, or use at most
 
 ## Rim light and separation
 
-A thin bright edge makes the cut-out leap off the background. Stack `drop-shadow()` filters on the
-cut-out (these follow the alpha edge):
+A thin bright edge makes the cut-out leap off the background. **For a pack face, bake it: `use_face({id, sticker: true})`.**
+The cream-and-ink sticker outline is drawn once into the PNG (`face-<id>-sticker.png`, or `-mirrored-sticker.png`), in the
+brand's light and ink colours when the project has a brand. That renders in a second or two; the same look made of stacked
+`drop-shadow()` filters on a 3000 px cut-out took 20 to 40 s per render, and the validator warns above five of them.
+
+```js
+use_face({ id: "a1b2c3d4", sticker: { displayWidth: 900 } })   // cream band 8 px, ink band to 13 px, at 900 px wide
+```
+
+- `displayWidth` is the CSS width you will give the face image (default 800). The bands are measured at that size, so set it
+  to what you will use. Optional `cream` and `ink` are hex colours; leave them out to take the brand's.
+- The outline adds a margin all round, so the result is a little bigger than the plain cut-out. The reply's `display` says
+  what to give the image: its `width` and `height` in CSS px, and the `offset` to subtract from its `left` and `top`, so the
+  face sits where the plain cut-out would have.
+- Then keep **one** hard `drop-shadow(12px 14px 0 rgba(0,0,0,.45))` in CSS for lift, plus a coloured glow behind the head, and
+  nothing more. Never stack more than 5 `drop-shadow()` filters on one element.
+- A keyline for a face that is not from the pack (a `cut_out` of a frame): at most three `drop-shadow()` filters, on an image
+  no bigger than it needs to be; do not stack nine.
 
 ```css
 .face {
   filter:
-    brightness(1.08) contrast(1.12) saturate(1.1)
-    drop-shadow(0 0 2px #fff) drop-shadow(0 0 2px #fff)          /* tight white keyline */
-    drop-shadow(-14px 0 16px var(--accent))                       /* accent rim on the side toward the text */
-    drop-shadow(0 22px 28px rgba(0,0,0,.55));                     /* grounding shadow */
+    drop-shadow(12px 14px 0 rgba(0,0,0,.45));                     /* the one hard shadow; the outline is in the PNG */
 }
 ```
 
-- Keyline 4-10 px at 1280 wide (more stacked shadows widen it). Rim light uses the accent from the
-  brief or the film's palette, on the side where the "light" comes from, usually the text side.
+- Keyline 4-10 px at 1280 wide for a plain cut-out. Rim light uses the accent from the brief or the film's palette, on the
+  side where the "light" comes from, usually the text side.
 - A coloured glow behind the head (a `radial-gradient` of the accent, 40-60% opacity) beats a flat
   background and costs nothing.
 

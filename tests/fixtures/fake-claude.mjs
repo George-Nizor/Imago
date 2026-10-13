@@ -112,6 +112,16 @@ if (!mcp) {
     ...(faces.length ? { frame: `assets/${faces[i % faces.length]}` } : {}),
     why: `Reason ${i + 1}.`,
   }));
+  // A title A/B test: the first message lists the titles ("1. \"A\"; 2. \"B\""); each concept echoes its own and says something else.
+  // FAKE_CLAUDE_PLANNER=repeat makes concept 1 repeat its title, notitle drops the echo.
+  if (/Title A\/B test/.test(systemPrompt ?? "")) {
+    const titles = [...stdin.matchAll(/\d+\. ("(?:[^"\\]|\\.)*")/g)].map((m) => JSON.parse(m[1]));
+    concepts.forEach((c, i) => {
+      if (kind !== "notitle") c.title = titles[i];
+      c.text = ["AND THEN", "PLOT TWIST", "NO WAY"][i % 3];
+      if (kind === "repeat" && i === 0) c.text = titles[0].split(" ").slice(0, 3).join(" ");
+    });
+  }
   // A face pack in the planning folder: pick its faces in turn (FAKE_CLAUDE_PLANNER=badface names one that is not there).
   if (fs.existsSync("faces/faces.json")) {
     const pack = JSON.parse(fs.readFileSync("faces/faces.json", "utf8")).faces;
@@ -133,7 +143,9 @@ trace("start");
 if (process.env.FAKE_CLAUDE_DELAY_MS) await new Promise((r) => setTimeout(r, Number(process.env.FAKE_CLAUDE_DELAY_MS)));
 const width = Number(mcp.env.IMAGO_WIDTH);
 const height = Number(mcp.env.IMAGO_HEIGHT);
-const asset = fs.existsSync("assets") ? fs.readdirSync("assets").find((f) => /\.(png|jpg|webp)$/.test(f)) : null;
+// A face-swap turn ("Replace assets/<old> with assets/<new>") puts the new face in the design.
+const swapTo = /Replace assets\/(\S+?\.png) with assets\/(\S+?\.png)/.exec(stdin)?.[2];
+const asset = swapTo ?? (fs.existsSync("assets") ? fs.readdirSync("assets").find((f) => /\.(png|jpg|webp)$/.test(f)) : null);
 
 fs.writeFileSync(
   "design.html",

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/index.js";
-import type { ConceptState, ConceptView, ConceptSetView, SetEvent, ZipExport } from "../api/types.js";
+import type { ConceptState, ConceptView, ConceptSetView, QuickExport, SetEvent, ZipExport } from "../api/types.js";
 import { Btn, Spinner } from "../components.js";
 import { Icon } from "../brand/Icon.js";
 import { FeedPreview } from "../feed/FeedPreview.js";
@@ -86,6 +86,10 @@ export function Compare({ id }: { id: string }) {
       setBusy("");
     }
   }
+  const finishQuick = (r: QuickExport) => {
+    download(r.url, r.name);
+    setExported({ text: `${r.name} · ${r.width}×${r.height} ${mb(r.bytes)} · saved in the project's exports`, warn: r.overBudget });
+  };
   const finishExport = (z: ZipExport) => {
     download(z.url, z.name);
     const sizes = z.files.map((f) => `${f.width}×${f.height} ${mb(f.bytes)}`).join(", ");
@@ -105,6 +109,17 @@ export function Compare({ id }: { id: string }) {
         {set.plan.source === "planner" ? "Claude planned these concepts first, then designed each one." : null}
         {setNote && running ? ` ${setNote}…` : ""}
       </p>
+      {set.titles && <p className="muted small">A title A/B test: each thumbnail goes with its own title ({set.titles.map((t) => `“${t}”`).join(", ")}). The Test &amp; Compare files are named after the titles.</p>}
+      {set.kind === "faces" && (
+        <div className="variants-source">
+          {set.source?.renderUrl && <img src={set.source.renderUrl} alt={`The original design, ${set.source.title ?? ""}`} />}
+          <p className="muted small">
+            The same design with a different face on each copy.{" "}
+            {set.picked ? "You picked one: it is starred, and the others are still in your library." : "Pick the one you like: it is starred and the others stay in your library."}
+            {set.source && !set.source.removed ? <> The original is untouched (<a href={`/p/${set.source.projectId}`} onClick={(e) => { e.preventDefault(); navigate(`/p/${set.source!.projectId}`); }}>open it</a>).</> : null}
+          </p>
+        </div>
+      )}
       {set.plan.source === "fallback" && <p className="banner-error" role="status"><Icon name="alert" size={22} /><span>{set.plan.note}</span></p>}
 
       <div className="compare-controls">
@@ -119,7 +134,8 @@ export function Compare({ id }: { id: string }) {
           ))}
         </div>
         <div className="compare-actions">
-          <Btn icon="sparkle" disabled={running || set.state === "draft" || busy !== "" || set.concepts.length >= 8} onClick={() => void act("another", () => api.anotherConcept(id), setSet)}>
+          <Btn icon="sparkle" disabled={running || set.state === "draft" || busy !== "" || set.concepts.length >= 8 || Boolean(set.titles) || set.kind === "faces"}
+            title={set.titles ? "A title test has one concept per title" : set.kind === "faces" ? "This set is the same design with other faces" : undefined} onClick={() => void act("another", () => api.anotherConcept(id), setSet)}>
             {busy === "another" ? "Adding…" : "Another concept"}
           </Btn>
           {running && <Btn variant="danger" icon="stop" size={18} onClick={() => void api.cancelConceptSet(id).then(setSet).catch((e) => toast(errorText(e)))}>Cancel</Btn>}
@@ -152,6 +168,8 @@ export function Compare({ id }: { id: string }) {
             included={chosen.has(c.projectId)}
             canInclude={set.testCompare && c.state === "done"}
             onInclude={() => toggle(c.projectId)}
+            onExport={() => void act(`export-${c.projectId}`, () => api.quickExport(c.projectId), finishQuick)}
+            onPick={() => void act(`pick-${c.projectId}`, () => api.pickConcept(id, c.projectId), (v) => { setSet(v); toast("Starred. The others stay in your library."); })}
             onCovers={() => void act(`covers-${c.projectId}`, () => api.platformExport(c.projectId), finishExport)}
             busy={busy}
           />
@@ -162,7 +180,7 @@ export function Compare({ id }: { id: string }) {
 }
 
 function ConceptCard({
-  c, set, surface, theme, progress, included, canInclude, onInclude, onCovers, busy,
+  c, set, surface, theme, progress, included, canInclude, onInclude, onCovers, onExport, onPick, busy,
 }: {
   c: ConceptView;
   set: ConceptSetView;
@@ -173,12 +191,15 @@ function ConceptCard({
   canInclude: boolean;
   onInclude: () => void;
   onCovers: () => void;
+  onExport: () => void;
+  onPick: () => void;
   busy: string;
 }) {
-  const title = set.title;
+  // In a title test each concept is shown (and judged in the feed) under its own title.
+  const title = c.forTitle ?? set.title;
   // The other concepts are the neighbours here: this is the comparison, and stand-ins fill the rest of the feed.
   const neighbours: FeedNeighbour[] = useMemo(() => {
-    const siblings = set.concepts.filter((o) => o.projectId !== c.projectId && o.renderUrl).map((o) => ({ src: o.renderUrl!, title: o.label ?? title }));
+    const siblings = set.concepts.filter((o) => o.projectId !== c.projectId && o.renderUrl).map((o) => ({ src: o.renderUrl!, title: o.forTitle ?? o.label ?? title }));
     const decoys = decoyNeighbours(set.format).map((d) => ({ src: d.src, title: d.title }));
     return [...siblings, ...decoys].slice(0, 7);
   }, [set.concepts, set.format, c.projectId, title]);
@@ -195,6 +216,8 @@ function ConceptCard({
       <div className="concept-image" style={{ aspectRatio: ratio }}>
         {c.renderUrl ? <img src={c.renderUrl} alt={`${label}, version ${c.current}`} /> : <span className="muted small">{c.state === "failed" || c.state === "cancelled" ? "No design" : progress ? `${progress}…` : "Waiting for its first render"}</span>}
       </div>
+      {c.forTitle && <p className="small"><strong>For the title.</strong> “{c.forTitle}”</p>}
+      {set.kind === "faces" && c.face && <p className="small variant-face"><img src={c.faceThumb ?? ""} alt="" onError={(e) => (e.currentTarget.style.display = "none")} /> <span className="muted">Pack face <span className="mono">{c.face}</span></span></p>}
       {c.idea && <p className="small"><strong>Idea.</strong> {c.idea}</p>}
       {c.why && <p className="small muted"><strong>Why.</strong> {c.why}</p>}
       {c.error && <p className="field-error">{c.error}</p>}
@@ -215,7 +238,13 @@ function ConceptCard({
         </div>
       )}
       <div className="concept-foot">
-        <Btn variant="primary" icon="send" size={18} disabled={c.removed} onClick={() => navigate(`/p/${c.projectId}`)}>Refine</Btn>
+        {set.kind === "faces" && c.state === "done" && (
+          set.picked === c.projectId
+            ? <span className="pill pill-done">Picked</span>
+            : <Btn variant="primary" icon="done" size={18} disabled={busy !== ""} onClick={onPick} title="Stars this one and keeps the others in your library">{busy === `pick-${c.projectId}` ? "Picking…" : "Pick this one"}</Btn>
+        )}
+        <Btn variant={set.kind === "faces" ? "ghost" : "primary"} icon="send" size={18} disabled={c.removed} onClick={() => navigate(`/p/${c.projectId}`)}>Refine</Btn>
+        {c.state === "done" && c.renderUrl && <Btn icon="export" size={18} disabled={busy !== ""} onClick={onExport} title="Saves the 3× JPG in this concept's project exports and downloads it">{busy === `export-${c.projectId}` ? "Exporting…" : "Export"}</Btn>}
         {set.format === "shorts" && c.state === "done" && <Btn icon="export" size={18} disabled={busy !== ""} onClick={onCovers}>{busy === `covers-${c.projectId}` ? "Exporting…" : "Covers"}</Btn>}
         {canInclude && (
           <label className="include small">

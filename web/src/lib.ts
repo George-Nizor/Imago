@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "./api/client.js";
-import type { PresetId, Size } from "./api/types.js";
+import type { PresetId, Project, Size } from "./api/types.js";
 
 // ---- routing: five paths, no library ----
 export type Route = { name: "start" } | { name: "library" } | { name: "faces" } | { name: "brands" } | { name: "new"; preset: PresetId; style?: string } | { name: "project"; id: string } | { name: "compare"; id: string };
@@ -102,6 +102,9 @@ export function shortAgo(iso: string): string {
   const days = (Date.now() - new Date(iso).getTime()) / 86_400_000;
   return days > 30 ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: days > 330 ? "numeric" : undefined }) : ago(iso);
 }
+
+/** Does the design hold a face copied in from the owner's face pack? */
+export const hasPackFace = (project: Project) => project.assets.some((a) => a.kind === "face" && a.faceId);
 
 /** Starts a download of `url` in the browser. */
 export function download(url: string, name: string) {

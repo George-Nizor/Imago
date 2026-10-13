@@ -48,6 +48,8 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
   const [kits, setKits] = useState<KitSummary[]>([]);
   const [kitId, setKitId] = useState("");
   const [count, setCount] = useState(1);
+  // A title A/B test: 2 or 3 titles, one thumbnail concept for each (null: not a title test).
+  const [abTitles, setAbTitles] = useState<string[] | null>(null);
   const [platforms, setPlatforms] = useState<PlatformId[]>(["youtube-shorts", "instagram-reels", "tiktok"]);
   useEffect(() => {
     if (preset === "thumbnail") api.listKits().then((l) => setKits(l.items)).catch(() => {});
@@ -80,7 +82,9 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
     setNotes(k.suggested.notes);
     setFormat(k.suggested.format);
   }
-  const asSet = preset === "thumbnail" && !styled && count > 1;
+  const asSet = preset === "thumbnail" && !styled && (count > 1 || abTitles !== null);
+  const setSize = abTitles ? abTitles.length : count;
+  const abOk = abTitles !== null && abTitles.every((t) => t.trim()) && new Set(abTitles.map((t) => t.trim().toLowerCase())).size === abTitles.length;
   const createdSet = useRef<string | null>(null);
 
   const [stages, setStages] = useState<Stage[] | null>(null);
@@ -96,7 +100,7 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
   const customOk = [custom.width, custom.height].every((v) => Number(v) >= 64 && Number(v) <= 4096);
   const ready =
     ok &&
-    (preset === "thumbnail" ? title.trim().length > 0 : preset === "photo" ? files.length > 0 && instruction.trim().length > 0 : description.trim().length > 0) &&
+    (preset === "thumbnail" ? (abTitles ? abOk : title.trim().length > 0) : preset === "photo" ? files.length > 0 && instruction.trim().length > 0 : description.trim().length > 0) &&
     (preset !== "graphic" || styled || picked !== undefined || customOk) &&
     (!styled || source !== null) &&
     (!fromKit || kit !== undefined) &&
@@ -106,7 +110,7 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
     setError("");
     const uploadsFirst = files.length > 0;
     const plan: Stage[] = asSet ? [
-      { label: `Creating ${count} concepts`, state: "doing" },
+      { label: `Creating ${setSize} concepts`, state: "doing" },
       ...(uploadsFirst ? [{ label: "Adding your images to each", state: "todo" as const }] : []),
       { label: "Starting the planner", state: "todo" },
     ] : [
@@ -129,8 +133,8 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
       let brief: Record<string, string | string[]> = {};
       let projectTitle = "";
       if (preset === "thumbnail") {
-        brief = { format, title: title.trim(), ...(colours.trim() && { channelColours: colours.trim() }), ...(notes.trim() && { notes: notes.trim() }), ...(format === "shorts" && platforms.length && { platforms }), ...(packFaces > 0 && !styled && { faceSource: faceSourceNow }) };
-        projectTitle = title.trim();
+        brief = { format, title: (abTitles ? abTitles[0]!.trim() : title.trim()), ...(colours.trim() && { channelColours: colours.trim() }), ...(notes.trim() && { notes: notes.trim() }), ...(format === "shorts" && platforms.length && { platforms }), ...(packFaces > 0 && !styled && { faceSource: faceSourceNow }) };
+        projectTitle = abTitles ? abTitles.map((t) => t.trim()).join(" / ").slice(0, 80) : title.trim();
       } else if (preset === "photo") {
         brief = { instruction: instruction.trim(), aspect };
         projectTitle = shortTitle(instruction);
@@ -142,7 +146,7 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
       }
       if (asSet) {
         // Three concepts: the server makes the set and its projects, takes the photos for each, then plans.
-        createdSet.current ??= (await api.createConceptSet({ title: projectTitle, brief, count, brand: brandId || null, ...(fromKit && kitId && { kit: kitId }) })).id;
+        createdSet.current ??= (await api.createConceptSet({ title: projectTitle, brief, brand: brandId || null, ...(abTitles ? { titles: abTitles.map((t) => t.trim()) } : { count }), ...(fromKit && kitId && { kit: kitId }) })).id;
         const setId = createdSet.current;
         if (uploadsFirst) {
           next();
@@ -313,16 +317,31 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
                 <div className="field">
                   <span className="label">How many concepts</span>
                   <div className="seg" role="radiogroup" aria-label="Concepts">
-                    <button type="button" role="radio" aria-checked={count === 1} className={count === 1 ? "on" : ""} onClick={() => setCount(1)}>One design</button>
-                    <button type="button" role="radio" aria-checked={count === 3} className={count === 3 ? "on" : ""} onClick={() => setCount(3)}>Three concepts to compare</button>
+                    <button type="button" role="radio" aria-checked={count === 1 && !abTitles} className={count === 1 && !abTitles ? "on" : ""} onClick={() => { setCount(1); setAbTitles(null); }}>One design</button>
+                    <button type="button" role="radio" aria-checked={count === 3 && !abTitles} className={count === 3 && !abTitles ? "on" : ""} onClick={() => { setCount(3); setAbTitles(null); }}>Three concepts to compare</button>
+                    <button type="button" role="radio" aria-checked={abTitles !== null} className={abTitles ? "on" : ""} onClick={() => setAbTitles(abTitles ?? [title.trim(), ""])}>A/B test titles</button>
                   </div>
-                  {count === 3 && <p className="muted small">Claude plans three different ideas, then designs them side by side. That uses about four times the usage of one design (a planning turn, then three design turns), and the face cut-out is done once and shared.</p>}
+                  {abTitles && <p className="muted small">One thumbnail per title, for YouTube's title and thumbnail test. Claude plans a concept for each title, and the words on a thumbnail never repeat its title. Two titles use about three times the usage of one design, three titles about four times.</p>}
+                  {count === 3 && !abTitles && <p className="muted small">Claude plans three different ideas, then designs them side by side. That uses about four times the usage of one design (a planning turn, then three design turns), and the face cut-out is done once and shared.</p>}
                 </div>
               )}
+              {abTitles ? (
+                <div className="field titles-field">
+                  <span className="label">Titles to test <em>two or three, each gets its own thumbnail</em></span>
+                  {abTitles.map((t, i) => (
+                    <div className="title-row" key={i}>
+                      <input value={t} aria-label={`Title ${"ABC"[i]}`} onChange={(e) => setAbTitles(abTitles.map((x, j) => (j === i ? e.target.value : x)))} placeholder={["I built a rocket in my garage", "My garage rocket nearly killed me", "Building a rocket for $50"][i]} autoFocus={i === 0} />
+                      {i === 2 && <Btn size={18} onClick={() => setAbTitles(abTitles.slice(0, 2))}>Remove</Btn>}
+                    </div>
+                  ))}
+                  {abTitles.length < 3 && <Btn size={18} onClick={() => setAbTitles([...abTitles, ""])}>Add a third title</Btn>}
+                </div>
+              ) : (
               <label className="field">
                 <span className="label">Title or topic</span>
                 <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="I built a rocket in my garage" autoFocus />
               </label>
+              )}
               <div className="field">
                 <span className="label">Your face <em>optional, the background is removed for you</em></span>
                 <Dropzone files={files} onChange={setFiles} multiple busy={busy} status={fileNote} title="Drop face photos here" hint="or paste from the clipboard (PNG, JPEG, WebP)" />
@@ -421,7 +440,7 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
 
         <div className="form-actions">
           <Btn type="submit" variant="primary" icon="sparkle" size={22} disabled={!ready || busy}>
-            {busy ? "Working…" : asSet ? "Plan three concepts" : "Design it"}
+            {busy ? "Working…" : asSet ? (abTitles ? `Plan ${setSize} concepts, one per title` : "Plan three concepts") : "Design it"}
           </Btn>
           {preset === "graphic" && picked && <span className="mono muted">{picked.group}: {picked.label}, {fmtSize(picked.size)}</span>}
         </div>

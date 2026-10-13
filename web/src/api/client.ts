@@ -4,7 +4,9 @@ import {
   EVENT_NAMES,
   SET_EVENT_NAMES,
   type SetEvent,
+  type ExportFile,
   type ExportFormat,
+  type FaceUsage,
   type ServerEvent,
 } from "./types.js";
 
@@ -174,4 +176,15 @@ export const realApi: Api = {
   setFaceSettings: (settings) => call("/api/faces/settings", json("PUT", settings)),
   retouchFaces: (ids) => call("/api/faces/retouch", json("POST", ids ? { ids } : {})),
   platformExport: (id, platforms) => call(`/api/projects/${enc(id)}/platform-export`, json("POST", platforms ? { platforms } : {})),
+  quickExport: (id) => call(`/api/projects/${enc(id)}/quick-export`, json("POST", {})),
+  listExports: async (id) => (await call<{ items: ExportFile[] }>(`/api/projects/${enc(id)}/exports`)).items,
+  deleteExport: async (id, name) => {
+    await call(`/api/projects/${enc(id)}/exports/${enc(name)}`, { method: "DELETE" });
+  },
+  faceStatus: (id) => call(`/api/projects/${enc(id)}/face-status`),
+  refreshFaces: (id) => call(`/api/projects/${enc(id)}/refresh-faces`, json("POST", {})),
+  faceVariants: (id, body) => call(`/api/projects/${enc(id)}/face-variants`, json("POST", body)),
+  pickConcept: (setId, projectId) => call(`/api/concept-sets/${enc(setId)}/pick`, json("POST", { project: projectId })),
+  faceUsage: async (id) => (await call<{ items: FaceUsage[] }>(`/api/faces/${enc(id)}/projects`)).items,
+  refreshFaceEverywhere: (id) => call(`/api/faces/${enc(id)}/refresh-projects`, json("POST", {})),
 };

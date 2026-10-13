@@ -6,9 +6,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SpawnError, runProcess } from "./process.mjs";
-import { registerCutout, syncAssets } from "./assets.mjs";
+import { registerCutout, registerFace, syncAssets } from "./assets.mjs";
 import { fontFamilies, highestVersion } from "./design-files.mjs";
-import { buildFirstPrompt, brandSection, buildSystemPrompt, conceptSection, facesClassifySection, installCraft, plannerSection } from "./presets/index.mjs";
+import { buildFirstPrompt, brandSection, buildSystemPrompt, conceptSection, faceSwapSection, facesClassifySection, installCraft, plannerSection } from "./presets/index.mjs";
 import { kitPromptSection } from "./kits.mjs";
 import { SIGNED_OUT, interpretLine, summarizeTool } from "./stream-json.mjs";
 import { electronEnv } from "./renderer.mjs";
@@ -33,8 +33,12 @@ let furtherPrompt;
 const furtherText = () =>
   (furtherPrompt ??= readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "presets", "further.md"), "utf8").trim());
 
-/** Which model, effort and tools a turn runs with. `modelKey` only matters for "further". */
-export function resolveRun(config, mode = "standard", modelKey = "opus") {
+// A face swap needs to see and render the design and fetch a mirrored copy of the chosen face; nothing else (no search, no cut-out).
+const MCP_FACE_SWAP = "mcp__imago__render,mcp__imago__use_face";
+
+/** Which model, effort and tools a turn runs with. `modelKey` only matters for "further"; `kind: "face-swap"` is the locked-down "try other faces" turn. */
+export function resolveRun(config, mode = "standard", modelKey = "opus", kind = "standard") {
+  if (kind === "face-swap") return { mode: "standard", modelKey: null, model: config.model, effort: config.effort, tools: STANDARD_TOOLS, allowed: `${SCOPED},${MCP_FACE_SWAP}`, disallowed: STANDARD_DISALLOWED, swap: true };
   if (mode === "further") {
     const model = config.furtherModels?.[modelKey];
     if (!model) throw new Error(`Unknown model "${modelKey}" for a further turn.`);
@@ -88,6 +92,7 @@ export function systemPromptFor(config, project, run = resolveRun(config), serie
   if (series) system = `${system}\n\n${series}`;
   if (brand) system = `${system}\n\n${brand}`;
   if (run.mode === "further") system = `${system}\n\n${furtherText()}`;
+  if (run.swap) system = `${system}\n\n${faceSwapSection()}`;
   // A concept-set turn: its own concept and the others, appended last.
   return concept ? `${system}\n\n${conceptSection(concept.concept, concept.siblings ?? [])}` : system;
 }
@@ -179,8 +184,8 @@ export async function runTurn(options) {
   }
 }
 
-async function runTurnInner({ config, store, id, text, mode = "standard", modelKey = "opus", emit, signal, release, concept = null }) {
-  const run = resolveRun(config, mode, modelKey);
+async function runTurnInner({ config, store, id, text, mode = "standard", modelKey = "opus", emit, signal, release, concept = null, kind = "standard" }) {
+  const run = resolveRun(config, mode, modelKey, kind);
   const projectDir = store.dirOf(id);
   const startedAt = Date.now();
   let project = await store.mutate(id, (p) => {
@@ -257,7 +262,15 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
                 // syncAssets below still picks the file up.
               }
             }
-            if ((await syncAssets(store, id)).length || tool === "mcp__imago__cut_out") emit("project", { project: await store.read(id) });
+            if (tool === "mcp__imago__use_face") {
+              try {
+                const made = JSON.parse(ev.text);
+                if (made?.name && made?.id) await registerFace(store, id, { name: made.name, width: made.width, height: made.height, faceId: made.id, mirrored: made.mirrored === true, stamp: made.stamp, sticker: made.sticker, display: made.display });
+              } catch {
+                // syncAssets below still picks the file up, without its bookkeeping.
+              }
+            }
+            if ((await syncAssets(store, id)).length || tool === "mcp__imago__cut_out" || tool === "mcp__imago__use_face") emit("project", { project: await store.read(id) });
           }
         }
         const name = toolNames.get(ev.toolUseId);
@@ -397,14 +410,14 @@ export function buildPlannerArgs(config, systemFile = "<system-prompt-file>") {
  * Runs the planning turn in `dir` (a folder with the kit's assets, the contact sheet and nothing of any
  * concept project) and leaves `concepts.json` there. Never throws; its session is never resumed.
  */
-export async function runPlanner({ config, dir, prompt, count, format, brand = null, signal, onTool }) {
+export async function runPlanner({ config, dir, prompt, count, format, brand = null, titles = null, signal, onTool }) {
   const promptDir = await mkdtemp(path.join(os.tmpdir(), "imago-prompt-"));
   const promptFile = path.join(promptDir, "system.md");
   const seen = { result: null };
   let chain = Promise.resolve();
   try {
     await installCraft({ preset: "thumbnail" }, dir).catch(() => {});
-    await writeFile(promptFile, plannerSection({ count, format, brand }), { mode: 0o600 });
+    await writeFile(promptFile, plannerSection({ count, format, brand, titles }), { mode: 0o600 });
     let outcome;
     try {
       outcome = await runProcess({

@@ -33,8 +33,11 @@ Imago/
 │   ├── face-pack.mjs   the pack's vocabulary, label validation, quality grade, ranking, use_face; read by the server and the render MCP
 │   ├── brands.mjs      brands: validation, CRUD, assets, and the snapshot into a project or a concept set's planner folder (see Brands)
 │   ├── face-sheet.mjs  numbered contact sheets of face images (classifier batch, planner pack sheet, find_faces)
-│   ├── exports.mjs     Test & Compare and per-platform JPG exports under a size budget
-│   └── presets/        design-rules.md, thumbnail.md, photo.md, graphic.md, series.md, further.md, planner.md, concept.md, craft/<preset>/
+│   ├── exports.mjs     Test & Compare and per-platform JPG exports under a size budget; the one-click export and the exports list
+│   ├── face-sticker.mjs  baked sticker outlines for pack faces, and the 2400 px cap on every face a project receives
+│   ├── project-faces.mjs  Refresh faces (no turn) and Try other faces (a face-variant set)
+│   ├── render-version.mjs one render of design.html as a new version, shared by the render MCP and the server's own renders
+│   └── presets/        design-rules.md, thumbnail.md, photo.md, graphic.md, series.md, further.md, planner.md, planner-titles.md, concept.md, face-swap.md, craft/<preset>/
 ├── render/render.cjs   headless Electron: design.html -> png|jpg|webp, plus measurements and the feed capture
 │   (dom-measure.cjs runs inside the page; measure.cjs is the pixel maths)
 ├── fonts/              content fonts for designs (TTF) + fonts.css + fonts.json
@@ -77,7 +80,7 @@ reference/craft/        the preset's craft files, copied in by the server on eve
 versions/v<n>.html      snapshot taken at each render
 renders/v<n>.png        the render of that snapshot, at scale 1
 renders/v<n>-feed.png   thumbnails only: that render in a feed mock-up (see "Feed mock-up and checks")
-exports/                files made by Export (JPGs, and the zips of platform covers)
+exports/                files made by Export (JPGs, and the zips of platform covers); listed in the UI with a download button (see "Exports")
 ```
 
 `project.json`:
@@ -106,7 +109,7 @@ exports/                files made by Export (JPGs, and the zips of platform cov
 }
 ```
 
-An asset of kind `face` is a pack face copied in (`face-<id>.png` or `face-<id>-mirrored.png`; it also carries `faceId` and `mirrored`); `syncAssets` recognises those names.
+An asset of kind `face` is a pack face copied in (`face-<id>.png`, `face-<id>-mirrored.png`, and with a baked outline `face-<id>[-mirrored]-sticker.png`; it also carries `faceId` and `mirrored`); `syncAssets` recognises those names. A copy made by `use_face` or by a concept set also carries `stamp {file, mtimeMs}` (which pack file it came from and that file's modification time: how the project knows its copy is out of date) and, for a sticker, `sticker {cream, ink, displayWidth, creamPx, inkPx}` and `display {width, height, offset}` (what Refresh faces bakes again). A `versions[]` entry the server made without a turn carries `note: "faces refreshed"`.
 
 An asset of kind `brand` is a brand file copied in at creation (`brand-<name>`; it also carries `brandKind` logo|mascot|other and `note`). A kit face frame imported with face source `auto` carries `quality {grade, faceHeightPx, sharpness}`, the pack's own grade.
 
@@ -398,9 +401,11 @@ when the effective value is false (`mirrorAllowedFor`).
   recency. The result is a contact sheet image (numbered, with id, expression, gaze, grade) and JSON `{faces: [{n, id, expression,
   intensity, gesture, gaze, headTurn, eyesOpen, textOrLogoInShot, mirrorSafe (the effective mirroring), retouched (use_face would give the retouched image), grade, faceHeightPx, width,
   height, starred, description}], packHas: {expression: count}, note?}`. The sheet is a help; without a renderer there is none.
-- `use_face({id, mirror?})` copies the face image (`retouched.png` when the effective retouch is on and done, else `cutout.png`; the description tells Claude pack faces arrive retouched and must not get heavy CSS filters) to `assets/face-<id>.png`, or with `mirror` writes `assets/face-<id>-mirrored.png`
-  with the pixels flipped (sharp), and returns `{name, id, mirrored, width, height, grade, faceHeightPx, retouched}`. It refuses a hidden or not
-  ready face and a mirror that is not allowed. The server then syncs assets (kind `face`).
+- `use_face({id, mirror?, sticker?})` copies the face image (`retouched.png` when the effective retouch is on and done, else `cutout.png`; the description tells Claude pack faces arrive retouched and must not get heavy CSS filters) to `assets/face-<id>.png`, or with `mirror` writes `assets/face-<id>-mirrored.png`
+  with the pixels flipped (sharp), and returns `{name, id, mirrored, width, height, grade, faceHeightPx, retouched, stamp, sticker?, display?}`. It refuses a hidden or not
+  ready face and a mirror that is not allowed. The server then registers the copy (kind `face`, with `stamp`, `sticker`, `display`) from that result, falling back to a sync of `assets/`.
+  **Every output is at most 2400 px on its long side** (a 3392 px cut-out was up to 12 MB and made every render slower); a face that already fits is copied byte for byte. The pack keeps the full-size files.
+- **Baked sticker outline** (`sticker: true | {cream?, ink?, displayWidth?, creamPx?, inkPx?}`, `face-sticker.mjs`). A cut-out under 9 to 14 stacked `drop-shadow()` filters made a 3x render take 20 to 40 s (a 1x render of one 3392 px cut-out under twelve measured 23 s and then hit the 40 s render timeout; the same design with the outline baked renders in 0.75 s at 1x and 2.4 s at 3x), because Chromium rasters every filter over the whole image. The outline is drawn once into the PNG: the subject's alpha (a pixel with alpha 8 or more is the subject) is grown by an exact circle (a distance transform, not a blur and a threshold, so the radius is the radius asked for), the ink band reaching `inkPx` CSS px from the subject and the cream band `creamPx`, composited ink, then cream, then the subject, with a one-pixel soft edge. The image is scaled so the padded result is at most 2400 px on either side. `cream` and `ink` are hex colours; left out they are the project's brand snapshot's `light` and `ink` colours, else `#F6EFDC` and `#15130F`. `displayWidth` (default 800) is the CSS width the design shows the face at, which is what `creamPx` (default 8) and `inkPx` (default 13) are measured at. The outline adds a margin all round, so the reply's `display {width, height, offset}` gives the CSS size to show the baked image at and the offset to subtract from its left and top so the face sits where the plain cut-out would. The mirror is applied before the bake. A bad colour or number is an error from the tool. The prompts (`face-finishing.md`, `thumbnail.md`, `design-rules.md`) tell Claude to use it, to keep one hard `drop-shadow()` in CSS and never to stack more than 5 `drop-shadow()` filters on one element.
 
 **Planner and concept sets.** When the pack has usable faces, the planning folder gets `faces/sheet.png` (starred first, then
 the best of each expression, at most 24, numbered), `faces/faces.json` (the same faces with their labels, grade and `mirrorSafe`,
@@ -541,10 +546,10 @@ Cost: a set of three is a planning turn plus three design turns, about four time
 
 A restart marks sets that were planning or designing as failed ("Imago was restarted"), as it clears `running` on projects.
 
-**Set view** (`GET /api/concept-sets/:id`): `{id, title, format, state, createdAt, updatedAt, count, kit, plan {source:
-planner|fallback, note}, costUsd, testCompare (true for 16:9), concepts: [{index, projectId, removed, state, error, archetype,
-label, idea, text, why, frame, title, current, versionCount, running, renderUrl, checks {ok, warn, info, warnings [{id,
-message}]}}]}`.
+**Set view** (`GET /api/concept-sets/:id`): `{id, kind: concepts|faces, titles, picked, source, title, format, state, createdAt, updatedAt, count, kit, plan {source:
+planner|fallback|faces, note}, costUsd, testCompare (true for 16:9), concepts: [{index, forTitle, projectId, removed, state, error, archetype,
+label, idea, text, why, frame, face, faceThumb, title, current, versionCount, running, renderUrl, checks {ok, warn, info, warnings [{id,
+message}]}}]}` (`titles` and `forTitle` for a title test, `source` and `face` for a face set; see "Title A/B sets" and "Faces inside a project").
 
 **SSE** `/api/concept-sets/:id/events`: `snapshot {set}`, `set {set}` after any change (coalesced to 120 ms; fed by the
 projects' own events), `concept.progress {index, text}` (a concept's current tool, from its `tool.use`), `set.progress {text}`
@@ -556,8 +561,56 @@ count and the first three warnings). A shared surface and theme control. Actions
 (while running), and for 16:9 sets a Test & Compare zip with a tick per concept (at most three). A shorts set has a per-concept
 "Covers" button instead. The Library shows a "Concept N · compare" badge on concept projects, and the workspace toolbar a link
 back to the compare screen. The start form (thumbnails) has "From a Fabula video" (a kit picker with poster, title, date,
-format, which prefills the form), a one-or-three concepts choice with the usage note, and, for the shorts format, a platforms
+format, which prefills the form), a one design, three concepts or A/B test titles choice with the usage note, and, for the shorts format, a platforms
 multi-select (all three by default).
+
+### Title A/B sets
+
+The owner A/B tests titles, one thumbnail per title. `POST /api/concept-sets {titles: [a, b(, c)], brief, kit?, brand?}` makes a set of
+2 or 3 concepts, one per title (400 `BAD_TITLES` unless 2 or 3 different, non-empty titles of at most 100 characters; 400 `BAD_COUNT` when a
+`count` is given and differs; `count` is otherwise left out). The set stores `titles`; each member stores its `title`, and
+the concept's project has that title as its name and as its brief's title (so the feed mock-up and `text.repeatsTitle` judge it against its own).
+
+- **The planner** gets `planner-titles.md` appended ("Title A/B test": concept N is the thumbnail for title N, it carries `"title": "<the
+  title exactly>"`, and **the thumbnail never repeats its title**: the words on the image say what the title does not), and its first message
+  lists the titles. `validateConcepts({titles})` requires concept N's `title` to be title N (compared by words, so case and spacing do not
+  matter; the listed title is what is kept) and refuses a `text` whose every content word is one of its title's (`repeatsTitle`, using the
+  checks' stop words), so such a plan falls back. The fallback still gives each concept its title (and `text: null`).
+- **The design turn** sees `- Its title (an A/B test: ...)` in its concept and the title in its brief; siblings are listed with their own titles.
+- **Another concept** is refused (409 `NOT_SUPPORTED`): a title test has one concept per title.
+- **Test & Compare** names each file after its title (`thumbnail-<n>-<title slug>.jpg`) and adds `titles.txt` (`<file>\t<title>` per line) to the zip.
+- The set view carries `titles`, and each concept `forTitle`. The compare screen shows each concept and its feed mock-up under its own title. The start form has an "A/B test titles" choice (two inputs, a third on request).
+
+## Faces inside a project
+
+`project-faces.mjs`, for what the server does with a project's pack faces without the owner typing to Claude.
+
+**Is the copy stale?** `GET /api/projects/:id/face-status` is `{faces: [{id, state: current|stale|unavailable, assets, reason?}], stale}`. A pack face is stale for
+a project when the pack file it would hand out now (`retouched.png` or `cutout.png`, by the effective retouch) differs from the recorded `stamp.file`
+or has a later modification time than `stamp.mtimeMs` (an asset with no stamp is compared with its own file's time). `unavailable`: the face left the pack, was
+hidden or is not ready.
+
+**Refresh faces** (`POST /api/projects/:id/refresh-faces`, no body, no Claude turn): takes the project's turn slot (409 `TURN_RUNNING` while a turn, a restore or another refresh
+holds it), copies every `face-<id>*` asset again from the pack (`takeFace`, keeping `mirrored` and the recorded sticker; a copy that can no longer be made, such as a mirror the owner has since forbidden, keeps its old file and is
+reported in `skipped`; 409 `NOTHING_REFRESHED` when none could be, 409 `NO_FACES` when the project has no pack face), re-registers them with fresh stamps, then renders `design.html` as a new
+version through `renderVersion` (the same files as a render from a turn: `versions/v<n>.html`, `renders/v<n>.png`, the feed mock-up and checks for a thumbnail), records it (`versions[]` entry with `note: "faces refreshed"`,
+`current`, and a closing assistant message "Refreshed the face from your face pack (...). Nothing else changed." carrying the version) and emits `render.done` and `project` on the project's SSE stream.
+422 `INVALID_DESIGN` when design.html no longer validates, 503 `RENDER_FAILED`. Reply `{project, version, refreshed: [name], skipped: [{name, reason}]}`. The earlier version stays restorable.
+`GET /api/faces/:id/projects` is `{items: [{id, title, stale, busy}]}` (the projects holding a copy), and `POST /api/faces/:id/refresh-projects {all?}` refreshes just that face in each project whose copy
+is stale (every one with `all: true`), one at a time, answering `{faceId, results: [{id, title, ok, version?, error?}]}`; one project failing does not stop the others.
+UI: the workspace shows "Your face pack has a newer copy of a face in this design" with a **Refresh faces** button while a project has a stale face and no turn is running; the Faces page's edit dialog has "In your designs" with **Update in projects that use this face**.
+
+**Try other faces** (`POST /api/projects/:id/face-variants {faces?: [ids] | count?}`, 201 set view): the design (a thumbnail with a render and a pack face in its `design.html`; 400 `NOT_THUMBNAIL`, 409 `NO_RENDERS`, 409 `NO_FACE`)
+is duplicated once per face (`store.duplicate`, so versions, assets and brand come along, no session). `faces` is 1 to 6 pack ids that are ready and not hidden (400 `BAD_FACES`); with only `count` (1 to 6, default 3; 400 `BAD_COUNT`) the faces are picked
+(`pickVariantFaces`): the best faces (`orderFaces`: starred, grade, sharpness and recency) with distinct expressions, never the face the design already uses, preferring expressions other than the design's own, then the next best faces
+(409 `NO_FACES` when the pack has no other usable face). The face the design shows is the first pack face asset its `design.html` names; the new face is copied into each copy treated as the old one was (mirrored the same way when
+allowed, with the same sticker outline) and registered. Each copy then gets **one face-swap turn** (`kind: "face-swap"` on `beginTurn`): the first message is "Change only the face. Replace assets/<old> with assets/<new> in design.html. ..." (with the new image's `display`
+size when it is a sticker), and the system prompt gets `face-swap.md` ("change only the face"; no layout, text, colour or effect changes; render once). The turn is locked down further than a design turn:
+`--allowedTools` is `Read(./**),Glob(./**),Write(./design.html),Edit(./design.html),mcp__imago__render,mcp__imago__use_face` (no `find_faces`, `cut_out` or stock tools), the rest as a standard turn. The turns run in parallel under
+`IMAGO_CONCEPT_CONCURRENCY` through the concept-set machinery, as a set with `kind: "faces"`, `sourceProjectId`, no planner and members that start `waiting` with a `concept {archetype: null, label: "<Expression> face", idea, text: null, why, face}`.
+Each copy's `conceptSet` points at the new set (so the workspace links back to the compare screen and the feed's neighbour rule excludes its siblings). The source design is untouched.
+The set view carries `kind`, `source {projectId, removed, title, renderUrl}`, `picked`, and each concept its `face` and `faceThumb`. **Pick**: `POST /api/concept-sets/:id/pick {project}` stars that member and records `picked` (400 `NOT_A_MEMBER` otherwise); the others stay in the library, unstarred.
+A face set refuses "another concept" (409 `NOT_SUPPORTED`). UI: a **Try other faces** button in the workspace toolbar (thumbnails with a pack face), a dialog with "Pick for me" (2 to 6) or "I'll choose" (a grid of pack faces), then the compare screen with the original beside the title, each card's pack face, **Pick this one** and **Refine**.
 
 ## Test & Compare and platform covers
 
@@ -587,6 +640,16 @@ One platform returns the JPG (`/projects/<id>/exports/<id>-v<n>-<platform>-<w>x<
 (`<id>-v<n>-covers.zip`, entries `<platform>-<w>x<h>.jpg`). Reels and TikTok share one render. The workspace's Export popover
 shows "Platform covers" with a tick per platform for a vertical thumbnail.
 
+## Exports
+
+A project's `exports/` folder is the owner's finished work, and the UI lists it so the filesystem is never needed.
+
+- `GET /api/projects/:id/exports` is `{items: [{name, url, bytes, at, kind: "image"|"zip"}]}`: the jpg, jpeg, png, webp and zip files in `exports/`, newest first (other files are not listed). The workspace shows them under the preview ("Exports (n)") with a **Download** and a **Delete** each.
+- `DELETE /api/projects/:id/exports/:name` removes one such file (400 `BAD_NAME` for any other name, 404 when it is not there).
+- `POST /api/projects/:id/quick-export` (no body; 409 `TURN_RUNNING`, 409 `NO_RENDERS`, 422 `INVALID_DESIGN`, 503 `RENDER_FAILED`) is the one-click **Export**: the current design as a JPG at the largest scale up to 3x (a thumbnail: 3840 px wide, under the 2 MB budget; `overBudget` says when even quality 40 did not fit),
+  rendered through `renderExport` like every export, written to `exports/<title slug>-v<n>.jpg` (so exporting again, or exporting an unchanged title, overwrites rather than piles up, and a title test's files carry their title) and answered `{name, url, width, height, bytes, overBudget}`.
+  The workspace's Export popover leads with it ("Export 4K JPG"), the compare screen has an **Export** per finished concept; both download the file as well as keeping it. The popover's format and scale choices and the platform covers are unchanged and also land in the list.
+
 ## Design rules (validate.mjs, also told to Claude)
 
 - `design.html` is a complete HTML document whose `body` is exactly `width`×`height` CSS pixels
@@ -602,6 +665,7 @@ shows "Platform covers" with a tick per platform for a vertical thumbnail.
 - Only families listed in `fonts/fonts.json` and generic families may be used. An unknown family
   is a warning, not an error. Inline `style="..."` attributes are read as rules of their own, so a single-quoted name
   (`style="font-family:'Lilita One'"`) is one family, not a run-on with the next piece of CSS.
+- More than 5 `drop-shadow()` filters in one `filter` declaration (a rule or an inline style) is a **warning** naming the selector and the count, pointing at `use_face {sticker}`. It never fails a render.
 - Errors make `render` fail with a message Claude can act on. Warnings render and are returned.
 
 ## Claude turn
@@ -659,7 +723,8 @@ claude -p --output-format stream-json --verbose
   mock-up is also saved as `renders/v<n>-feed.png`. The mock-up and the checks never fail a render:
   if either breaks, the design image and `{version, warnings}` still come back.
   On validation errors it returns `isError: true` with the list.
-- `find_faces({expression?, gesture?, gaze?, minGrade?, count?})` and `use_face({id, mirror?})`: the owner's face pack, see "Face pack". Allowed in standard and further turns.
+- `find_faces({expression?, gesture?, gaze?, minGrade?, count?})` and `use_face({id, mirror?, sticker?})`: the owner's face pack, see "Face pack". Allowed in standard and further turns (a face-swap turn gets `render` and `use_face` only).
+- The render itself is `render-version.mjs` (`renderVersion`), which the server also calls when it renders without a turn.
 - `cut_out({asset})` (and every face-pack cut-out): the image is turned upright, the background-removal model gives only the
   transparency, and the colour is the photo's own at full depth. The library's own PNG is a 256-colour palette image whose
   dithering turned skin and teeth into speckles, so it is never used for colour. It removes the background of `assets/<asset>` and writes
@@ -712,14 +777,21 @@ status.
 | `POST /api/brands/:id/assets?kind=logo\|mascot\|other&note=` | raw image, `x-filename`, as for projects | 201 `{name, kind, note, width, height, url}` |
 | `PATCH|DELETE /api/brands/:id/assets/:name` | `{kind?, note?}` | the asset; `{ok: true}` |
 | `GET /api/kits` | | `{items: [kit summary], rejected: [{name, reason}]}`; see Fabula kits |
-| `POST /api/concept-sets` | `{title?, brief, kit?, brand?, count?: 2-4 (default 3)}` | 201 set view (state `draft`) and its N projects; 400 `BAD_COUNT`, `NEEDS_TITLE` |
+| `POST /api/concept-sets` | `{title?, brief, kit?, brand?, count?: 2-4 (default 3)}` or `{titles: [2 or 3], brief, ...}` | 201 set view (state `draft`) and its N projects; 400 `BAD_COUNT`, `NEEDS_TITLE`, `BAD_TITLES`; see "Title A/B sets" |
 | `POST /api/concept-sets/:id/assets` | raw image, `x-filename`, as for projects | `{name, width, height}`: the photo goes into every concept project and the planner's folder; only while `draft` (409 `NOT_DRAFT`) |
 | `POST /api/concept-sets/:id/start` | | 202 set view; plans and designs in the background; 409 `ALREADY_STARTED` |
 | `GET /api/concept-sets/:id` | | the set view |
 | `GET /api/concept-sets/:id/events` | | SSE, see Concept sets |
 | `POST /api/concept-sets/:id/cancel` | | set view; aborts the planner and every running design turn |
-| `POST /api/concept-sets/:id/another` | | 202 set view; 409 `SET_BUSY`, `TOO_MANY` (eight archetypes, so at most eight concepts) |
+| `POST /api/concept-sets/:id/another` | | 202 set view; 409 `SET_BUSY`, `TOO_MANY` (eight archetypes, so at most eight concepts), `NOT_SUPPORTED` (title tests and face sets) |
 | `POST /api/concept-sets/:id/test-compare` | `{projects?: [project id]}` | `{name, url, bytes, files}`; see Test & Compare |
+| `GET /api/projects/:id/face-status` | | `{faces: [{id, state, assets, reason?}], stale}`; see "Faces inside a project" |
+| `POST /api/projects/:id/refresh-faces` | | `{project, version, refreshed, skipped}`: the pack's faces copied in again and a new version rendered with no turn; 409 `TURN_RUNNING`, `NO_FACES`, `NOTHING_REFRESHED` |
+| `POST /api/projects/:id/face-variants` | `{faces?: [id], count?: 1-6}` | 201 set view (`kind: "faces"`): the design once per face, one face-swap turn each |
+| `POST /api/concept-sets/:id/pick` | `{project}` | set view; stars that concept and records `picked` |
+| `POST /api/projects/:id/quick-export` | | `{name, url, width, height, bytes, overBudget}`: the 3x JPG saved in `exports/` under the title |
+| `GET /api/projects/:id/exports`, `DELETE /api/projects/:id/exports/:name` | | the exports list; removal |
+| `GET /api/faces/:id/projects`, `POST /api/faces/:id/refresh-projects` | `{all?}` | where a pack face is used and which copies are stale; refresh that face in them |
 | `GET /api/projects/:id/events` | | SSE, below |
 
 ### Series and the style reference
@@ -792,6 +864,8 @@ The UI follows Instrumenta brand v2 (`Instrumenta/brand/ALIGNMENT.md`). The acce
 It uses Fraunces for names and headings, Commissioner for the interface, and Spline Sans Mono for
 sizes, versions and costs. It has dark and light themes, honours reduced motion and shows a
 visible focus.
+
+The workspace toolbar has **Try other faces** (thumbnails with a pack face) and the Export popover leads with a one-click export; a bar offers **Refresh faces** when the pack's copy is newer, and the project's exports are listed under the preview (see "Faces inside a project" and "Exports").
 
 Routes: `/` (start: the three presets and the latest eight projects, "View all"), `/library`, `/faces` (the face pack), `/brands` (see Brands),
 `/new/<preset>` (`?style=<project id>` for "New in this style"), `/p/<id>`, `/c/<set id>` (the compare screen). The library searches by
@@ -915,7 +989,7 @@ config from `--mcp-config`. It then:
 3. emits stream-json lines: `system/init` with a `session_id`, an assistant `text`, a `tool_use`
    for `mcp__imago__render`, the matching `tool_result`, and a `result` with `total_cost_usd: 0`.
 
-`FAKE_CLAUDE_MODE=signed-out|fail|slow` exercises the error paths; a turn started without the imago MCP server is a planning turn and writes `concepts.json` (`FAKE_CLAUDE_PLANNER=invalid|missing|duplicate` changes what); a turn started without the imago MCP server whose system prompt says "You label photos" is a face classification and writes `labels.json` for every image in `images/` (`FAKE_CLAUDE_FACES=invalid|partial|missing|badjson`), and a planner finding `faces/faces.json` sets `face` on each concept (`FAKE_CLAUDE_PLANNER=badface` names one the pack lacks); `FAKE_CLAUDE_FAIL_WHEN=<regex>` kills a turn whose prompt matches; `FAKE_CLAUDE_DELAY_MS` holds a design turn open and `FAKE_CLAUDE_TRACE=<file>` logs when turns start and end (the parallelism tests); `early-fail` dies before `init`, and `resume-fail` answers "No conversation found" to any `--resume`. The fake reads the system prompt file while the turn runs and records it as `systemPrompt` in `fake-claude-call.json`.
+`FAKE_CLAUDE_MODE=signed-out|fail|slow` exercises the error paths; a turn started without the imago MCP server is a planning turn and writes `concepts.json` (`FAKE_CLAUDE_PLANNER=invalid|missing|duplicate` changes what); a turn started without the imago MCP server whose system prompt says "You label photos" is a face classification and writes `labels.json` for every image in `images/` (`FAKE_CLAUDE_FACES=invalid|partial|missing|badjson`), and a planner finding `faces/faces.json` sets `face` on each concept (`FAKE_CLAUDE_PLANNER=badface` names one the pack lacks); `FAKE_CLAUDE_FAIL_WHEN=<regex>` kills a turn whose prompt matches; `FAKE_CLAUDE_DELAY_MS` holds a design turn open and `FAKE_CLAUDE_TRACE=<file>` logs when turns start and end (the parallelism tests); `early-fail` dies before `init`, and `resume-fail` answers "No conversation found" to any `--resume`. A planner whose system prompt has "Title A/B test" reads the titles from the first message and echoes each in its concept with its own words (`FAKE_CLAUDE_PLANNER=repeat` makes concept 1 repeat its title, `notitle` drops the echo). A design turn whose first message says "Replace assets/<old> with assets/<new>" (a face swap) shows the new image in its design. The fake reads the system prompt file while the turn runs and records it as `systemPrompt` in `fake-claude-call.json`.
 
 ## Take it further
 
