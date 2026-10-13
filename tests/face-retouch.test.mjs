@@ -355,16 +355,17 @@ test("use_face takes retouched.png when the effective retouch is on and done, ot
   assert.equal(faceImageFile({ retouched: { state: "done" } }, { retouchAll: true }), "retouched.png");
 });
 
-/** The synthetic face with an open smile: a row of yellowish teeth between red lips in the lower face. */
+/** The synthetic face with an open smile: a row of yellowish teeth between red lips in the lower face, about a third of
+ * the face box wide, as a real smile's teeth are. */
 function smilingFace({ open = true } = {}) {
   const rgba = syntheticFace({ blotch: false });
   const lip = [150, 70, 62];
   const tooth = [222, 196, 150];
   for (let y = 300; y < 336; y += 1) {
-    for (let x = 140; x < 260; x += 1) {
+    for (let x = 160; x < 240; x += 1) {
       const i = (y * W + x) * 4;
       const inLip = y < 306 || y >= 330;
-      const c = !open || inLip ? lip : (x - 140) % 20 === 0 ? [120, 80, 70] : tooth; // a dark line between teeth
+      const c = !open || inLip ? lip : (x - 160) % 16 === 0 ? [120, 80, 70] : tooth; // a dark line between teeth
       rgba[i] = c[0];
       rgba[i + 1] = c[1];
       rgba[i + 2] = c[2];
@@ -382,13 +383,33 @@ const yellowness = (rgba, x0, x1, y0, y1) => {
 test("teeth are found in an open smile and lose their yellow; lips and a closed mouth are left alone", () => {
   const src = smilingFace();
   const { data, report } = run(src, { strength: 0.75, steps: ["teeth"] });
-  assert.ok(report.steps[0].found > 500, `teeth found: ${report.steps[0].found}`);
+  assert.ok(report.steps[0].found > 400, `teeth found: ${report.steps[0].found}`);
   // Every tooth along the row, not just the brightest one, loses most of its yellow.
-  for (const x0 of [145, 185, 225, 245]) assert.ok(yellowness(data, x0, x0 + 10, 310, 326) < yellowness(src, x0, x0 + 10, 310, 326) * 0.75, `tooth at x ${x0}`);
+  for (const x0 of [163, 180, 212, 228]) assert.ok(yellowness(data, x0, x0 + 10, 310, 326) < yellowness(src, x0, x0 + 10, 310, 326) * 0.75, `tooth at x ${x0}`);
   // The lips keep their colour.
-  assert.ok(Math.abs(yellowness(data, 150, 250, 300, 304) - yellowness(src, 150, 250, 300, 304)) < 4, "upper lip");
+  assert.ok(Math.abs(yellowness(data, 165, 235, 300, 304) - yellowness(src, 165, 235, 300, 304)) < 4, "upper lip");
   // Nothing is whitened past an off-white.
   for (let i = 0; i < data.length; i += 4) if (Math.max(data[i], data[i + 1], data[i + 2]) > 231 && Math.max(src[i], src[i + 1], src[i + 2]) <= 231) assert.fail("whitened past the cap");
   const closed = smilingFace({ open: false });
   assert.equal(run(closed, { strength: 0.75, steps: ["teeth"] }).report.steps[0].found, 0);
+});
+
+test("a cut-out's interior is made solid, its soft edge is left as the model gave it", async () => {
+  const { solidInterior } = await import("../server/cutout.mjs");
+  const w = 60;
+  const h = 60;
+  const alpha = Buffer.alloc(w * h);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const d = Math.hypot(x - 30, y - 30);
+      alpha[y * w + x] = d < 20 ? 255 : d < 24 ? Math.round(255 * (24 - d) / 4) : 0; // a disc with a soft rim
+    }
+  }
+  for (let y = 26; y < 34; y += 1) for (let x = 26; x < 34; x += 1) alpha[y * w + x] = 246; // "teeth" a little see-through
+  const out = solidInterior(alpha, w, h);
+  assert.equal(out[30 * w + 30], 255, "interior made solid");
+  for (let i = 0; i < w * h; i += 1) {
+    const d = Math.hypot((i % w) - 30, Math.floor(i / w) - 30);
+    if (d >= 19) assert.equal(out[i], alpha[i], `edge pixel ${i} untouched`);
+  }
 });

@@ -30,7 +30,7 @@ export async function cutOutBytes(bytes) {
   }
   const { width, height } = base.info;
   const png = await sharp(base.data, { raw: { width, height, channels: 3 } })
-    .joinChannel(mask.data, { raw: { width, height, channels: 1 } })
+    .joinChannel(solidInterior(mask.data, width, height), { raw: { width, height, channels: 1 } })
     .png()
     .toBuffer();
   return { png, width, height };
@@ -61,4 +61,58 @@ export async function cutOut(projectDir, asset) {
   // cut-out of face-cutout.png becomes face-cutout-cutout.png.
   const name = await writeUnique(path.join(projectDir, "assets"), `${asset.replace(/\.[^.]+$/, "")}-cutout.png`, png);
   return { name, width, height, from: asset };
+}
+
+/**
+ * The model sometimes leaves bright areas inside the subject (teeth, eye whites) a few levels short of opaque. Anything
+ * more than a few pixels from the background, which is what is reachable from the image border through clearly
+ * transparent pixels, is made fully opaque; the soft edge itself (hair, the outline) is left exactly as the model gave it.
+ */
+export function solidInterior(alpha, width, height, margin = 6) {
+  const n = width * height;
+  const background = new Uint8Array(n);
+  const stack = [];
+  const visit = (i) => {
+    if (!background[i] && alpha[i] < 128) {
+      background[i] = 1;
+      stack.push(i);
+    }
+  };
+  for (let x = 0; x < width; x += 1) {
+    visit(x);
+    visit((height - 1) * width + x);
+  }
+  for (let y = 0; y < height; y += 1) {
+    visit(y * width);
+    visit(y * width + width - 1);
+  }
+  while (stack.length) {
+    const i = stack.pop();
+    const x = i % width;
+    if (x > 0) visit(i - 1);
+    if (x < width - 1) visit(i + 1);
+    if (i >= width) visit(i - width);
+    if (i < n - width) visit(i + width);
+  }
+  // Chamfer distance from the background, two passes.
+  const far = 1e6;
+  const dist = new Float32Array(n);
+  for (let i = 0; i < n; i += 1) dist[i] = background[i] ? 0 : far;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = y * width + x;
+      if (x > 0) dist[i] = Math.min(dist[i], dist[i - 1] + 1);
+      if (y > 0) dist[i] = Math.min(dist[i], dist[i - width] + 1);
+    }
+  }
+  for (let y = height - 1; y >= 0; y -= 1) {
+    for (let x = width - 1; x >= 0; x -= 1) {
+      const i = y * width + x;
+      if (x < width - 1) dist[i] = Math.min(dist[i], dist[i + 1] + 1);
+      if (y < height - 1) dist[i] = Math.min(dist[i], dist[i + width] + 1);
+    }
+  }
+  const out = Buffer.from(alpha);
+  for (let i = 0; i < n; i += 1) if (dist[i] > margin) out[i] = 255;
+  return out;
 }

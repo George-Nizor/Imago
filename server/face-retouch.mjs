@@ -284,6 +284,10 @@ function whitenTeeth({ R, G, B, alpha, width, height, box, s }) {
   const grown = new Uint8Array(m);
   const band = fh * 0.09;
   const seedRow = Math.floor(seed / cw);
+  // A smile's teeth sit within about a quarter of the face's width either side of its brightest tooth; a bright,
+  // de-reddened patch of cheek by the mouth corner lies further out.
+  const seedCol = seed % cw;
+  const span = box.w * width * 0.24;
   let top = 0;
   let bottom = ch - 1;
   const grow = (stack) => {
@@ -294,7 +298,7 @@ function whitenTeeth({ R, G, B, alpha, width, height, box, s }) {
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const nx = x + dx;
         const ny = y + dy;
-        if (nx < 0 || nx >= cw || ny < top || ny > bottom || Math.abs(ny - seedRow) > band) continue;
+        if (nx < 0 || nx >= cw || ny < top || ny > bottom || Math.abs(ny - seedRow) > band || Math.abs(nx - seedCol) > span) continue;
         const k = ny * cw + nx;
         if (grown[k] || !(loose[k] > 0.25 || strict[k] > 0.3)) continue;
         grown[k] = 1;
@@ -316,7 +320,7 @@ function whitenTeeth({ R, G, B, alpha, width, height, box, s }) {
       for (let x = 0; x < cw; x += 1) { if (grown[y * cw + x]) last = x; else if (x - last <= reach) near[x] = 1; }
       last = 1e9;
       for (let x = cw - 1; x >= 0; x -= 1) { if (grown[y * cw + x]) last = x; else if (last - x <= reach) near[x] = 1; }
-      for (let x = 0; x < cw; x += 1) { const j = y * cw + x; if (near[x] && !grown[j] && loose[j] > 0.25) { grown[j] = 1; stack.push(j); } }
+      for (let x = 0; x < cw; x += 1) { const j = y * cw + x; if (near[x] && !grown[j] && loose[j] > 0.25 && Math.abs(x - seedCol) <= span) { grown[j] = 1; stack.push(j); } }
     }
     if (!stack.length) break;
     grow(stack);
@@ -345,37 +349,55 @@ function whitenTeeth({ R, G, B, alpha, width, height, box, s }) {
     }
     sizes.push(size);
   }
+  // A piece is kept only when it holds confidently tooth-like pixels (a bright patch of cheek by the mouth corner does
+  // not) and is not a crumb; the seed's own piece always is.
+  const confident = new Int32Array(sizes.length);
+  for (let j = 0; j < m; j += 1) if (label[j] && strict[j] > 0.5) confident[label[j]] += 1;
   const largest = Math.max(...sizes);
-  const keep = new Float32Array(m);
-  for (let j = 0; j < m; j += 1) if (label[j] && sizes[label[j]] >= largest * 0.03) keep[j] = 1;
-  const closed = blur(keep, cw, ch, Math.max(1, fh * 0.006));
+  const keepLabel = sizes.map((size, id) => id > 0 && (id === label[seed] || (size >= largest * 0.05 && confident[id] >= Math.max(12, size * 0.05))));
+  // The found teeth only locate the mouth: an oval around them, feathered. Inside it the whites are raised gently, by
+  // how bright each spot is on average (a light blur), so a fleck of stain is treated exactly like its tooth and keeps
+  // its natural, faint look rather than standing out against whitened neighbours; dark gaps and lips are barely touched.
+  let left = cw;
+  let right = 0;
+  let upper = ch;
+  let lower = 0;
+  for (let j = 0; j < m; j += 1) {
+    if (!keepLabel[label[j]]) continue;
+    const x = j % cw;
+    const y = (j - x) / cw;
+    left = Math.min(left, x);
+    right = Math.max(right, x);
+    upper = Math.min(upper, y);
+    lower = Math.max(lower, y);
+  }
+  if (right <= left || lower <= upper) return { found: 0, skinY };
+  const cx = (left + right) / 2;
+  const cy = (upper + lower) / 2;
+  const rx = ((right - left) / 2) * 1.15 + 2;
+  const ry = ((lower - upper) / 2) * 1.3 + 2;
+  const Yavg = blur(Yc, cw, ch, Math.max(1, fh * 0.006));
   const amount = Math.min(1, s * 1.3);
-  // Even the teeth out a little first: stains and specks are small and the surface is smooth.
-  const soft = [R, G, B].map((P) => {
-    const plane = new Float32Array(m);
-    for (let y = 0; y < ch; y += 1) for (let x = 0; x < cw; x += 1) plane[y * cw + x] = P[(y + y0) * width + x + x0];
-    return blur(plane, cw, ch, Math.max(1, fh * 0.004));
-  });
   let found = 0;
   for (let y = 0; y < ch; y += 1) {
     for (let x = 0; x < cw; x += 1) {
       const j = y * cw + x;
-      const weight = smoothstep(0.25, 0.6, closed[j]) * Math.max(loose[j], strict[j], 0.6 * closed[j]);
-      const k = Math.min(1, weight * 1.3) * amount;
+      const oval = 1 - smoothstep(0.8, 1.05, Math.hypot((x - cx) / rx, (y - cy) / ry));
+      const k = oval * smoothstep(skinY * 0.75, skinY * 1.15, Yavg[j]) * amount;
       if (k < 0.01) continue;
       found += 1;
       const i = (y + y0) * width + x + x0;
-      let r = R[i] + (soft[0][j] - R[i]) * 0.5 * k;
-      let g = G[i] + (soft[1][j] - G[i]) * 0.5 * k;
-      let b = B[i] + (soft[2][j] - B[i]) * 0.5 * k;
+      let r = R[i];
+      let g = G[i];
+      let b = B[i];
       const Y = lumaOf(r, g, b);
-      const chroma = 1 - 0.45 * k;
-      const lift = 1 + 0.06 * k;
+      const chroma = 1 - 0.4 * k;
+      const lift = 1 + 0.07 * k;
       r = (Y + (r - Y) * chroma) * lift;
       g = (Y + (g - Y) * chroma) * lift;
       b = (Y + (b - Y) * chroma) * lift;
       const peak = Math.max(r, g, b);
-      if (peak > 0.9) { r *= 0.9 / peak; g *= 0.9 / peak; b *= 0.9 / peak; }
+      if (peak > 0.92) { r *= 0.92 / peak; g *= 0.92 / peak; b *= 0.92 / peak; }
       R[i] = clamp(r, 0, 1);
       G[i] = clamp(g, 0, 1);
       B[i] = clamp(b, 0, 1);
@@ -534,6 +556,9 @@ export function retouchPixels({ rgba, channels = 4, width, height, box, strength
       const fh = region.faceHeight;
       // Colour under the cut-out's soft edge is unreliable (often black), so every filter below sees the subject's own
       // colours spread outward over it; otherwise the rim would darken and the redness reference would be dragged down.
+      // The filters see the filled colours, but only their change is written back to an edge pixel: the fill is never
+      // painted into the photo (a tooth a few levels short of opaque once came back speckled with lip colour).
+      const beforeFill = crop.map((plane) => Float32Array.from(plane));
       {
         const fillSigma = Math.max(2, fh * 0.02);
         const weight = new Float32Array(m);
@@ -547,6 +572,7 @@ export function retouchPixels({ rgba, channels = 4, width, height, box, strength
         }
         for (let j = 0; j < m; j += 1) Y[j] = lumaOf(crop[0][j], crop[1][j], crop[2][j]);
       }
+      const afterFill = crop.map((plane) => Float32Array.from(plane));
       // The mask: skin-coloured, inside the feathered box, not near hair, brows, lashes or lips.
       const dark = new Float32Array(m);
       for (let j = 0; j < m; j += 1) dark[j] = 1 - smoothstep(0.5, 0.78, Y[j] / skinMedian);
@@ -609,9 +635,10 @@ export function retouchPixels({ rgba, channels = 4, width, height, box, strength
         for (let x = 0; x < cw; x += 1) {
           const i = (y + y0) * width + (x + x0);
           const j = y * cw + x;
-          R[i] = clamp(crop[0][j], 0, 1);
-          G[i] = clamp(crop[1][j], 0, 1);
-          B[i] = clamp(crop[2][j], 0, 1);
+          const edge = ca[j] < 250;
+          R[i] = clamp(edge ? beforeFill[0][j] + crop[0][j] - afterFill[0][j] : crop[0][j], 0, 1);
+          G[i] = clamp(edge ? beforeFill[1][j] + crop[1][j] - afterFill[1][j] : crop[1][j], 0, 1);
+          B[i] = clamp(edge ? beforeFill[2][j] + crop[2][j] - afterFill[2][j] : crop[2][j], 0, 1);
         }
       }
     }
