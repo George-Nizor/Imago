@@ -313,6 +313,9 @@ at 0.5 the skin keeps its pores and the beard its texture, at 1 it starts to loo
    by the subject's own colour spread outward, so the rim does not darken.
 5. *Redness*: skin redder than its surroundings (R minus the mean of G and B, against a large local average) is reduced by
    0.75 x strength in the mask, giving a quarter of it back to G and B so a spot does not turn into a dark patch.
+   *Blemishes* (after redness): spot healing by frequency separation. Skin redder or darker than a wide, skin-only blur of
+   its surroundings (acne, marks, the light-and-shadow bump of a raised spot) takes that surrounding colour at low frequency
+   while its fine texture stays on top, so pores and beard keep their detail.
    *Teeth* (after redness): teeth are found in the mouth area of `faceBox` without landmarks, as pixels much brighter than
    their surroundings and much less red for their brightness than skin. Confident seeds are grown through looser tooth-like
    pixels connected to the strongest seed, short gaps along the row are bridged, and stray fragments dropped. They are evened

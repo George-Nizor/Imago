@@ -415,3 +415,18 @@ test("a cut-out's interior is made solid, its soft edge is left as the model gav
     if (d >= 19 || alpha[i] < 200) assert.equal(out[i], alpha[i], `pixel ${i} untouched`);
   }
 });
+
+test("blemish healing evens out a red patch on the cheek and keeps the skin's texture", () => {
+  const src = syntheticFace();
+  const { data, report } = run(src, { strength: 0.8, steps: ["blemish"] });
+  assert.ok(report.steps[0].healed > 0);
+  const red = (rgba, x0, y0, r) => {
+    let s = 0;
+    let n = 0;
+    for (let y = y0 - r; y < y0 + r; y += 1) for (let x = x0 - r; x < x0 + r; x += 1) { const i = (y * W + x) * 4; s += rgba[i] - (rgba[i + 1] + rgba[i + 2]) / 2; n += 1; }
+    return s / n;
+  };
+  const around = red(src, 200, 300, 10);
+  assert.ok(red(data, 130, 270, 12) - around < (red(src, 130, 270, 12) - around) * 0.6, "the patch is much closer to the skin around it");
+  assert.ok(energy(data, { x0: 110, y0: 250, x1: 150, y1: 290 }) > energy(src, { x0: 110, y0: 250, x1: 150, y1: 290 }) * 0.4, "pores survive");
+});

@@ -6,7 +6,7 @@
 import fs from "node:fs/promises";
 
 export const DEFAULT_RETOUCH_STRENGTH = 0.5;
-export const ALL_STEPS = ["balance", "tone", "warmth", "smooth", "redness", "teeth", "sharpen"];
+export const ALL_STEPS = ["balance", "tone", "warmth", "smooth", "redness", "blemish", "teeth", "sharpen"];
 const MAX_PIXELS = 100_000_000;
 
 // What healthy skin looks like in R/G and B/G once the light is neutral. A photo whose face sits outside
@@ -529,7 +529,7 @@ export function retouchPixels({ rgba, channels = 4, width, height, box, strength
   }
 
   // 4 and 5. Smoothing and redness work on the face crop only.
-  const smoothing = on.has("smooth") || on.has("redness");
+  const smoothing = on.has("smooth") || on.has("redness") || on.has("blemish");
   if (smoothing) {
     const { x0, y0, x1, y1 } = region.work;
     const cw = x1 - x0;
@@ -630,6 +630,41 @@ export function retouchPixels({ rgba, channels = 4, width, height, box, strength
         }
         // And a general flush down: skin that is redder than the face's own average, pulled a few percent toward it.
         report.steps.push({ step: "redness", k });
+      }
+
+      if (on.has("blemish")) {
+        // Spot healing by frequency separation: acne and marks are patches redder (or darker) than the skin around them,
+        // too broad for the edge-preserving smoothing to touch. Their low-frequency colour is replaced by the surrounding
+        // skin's (a wide blur of skin pixels only, so beard and hair do not bleed in) while their fine texture, the pores,
+        // stays on top, so the cheek reads as clear skin rather than a smear.
+        const wide = Math.max(4, fh * 0.06);
+        const fine = Math.max(1.5, fh * 0.008);
+        const weight = new Float32Array(m);
+        for (let j = 0; j < m; j += 1) weight[j] = maskSoft[j] > 0.15 ? maskSoft[j] : 0;
+        const den = blur(weight, cw, ch, wide);
+        const base = [0, 1, 2].map((c) => {
+          const num = new Float32Array(m);
+          for (let j = 0; j < m; j += 1) num[j] = crop[c][j] * weight[j];
+          const b = blur(num, cw, ch, wide);
+          for (let j = 0; j < m; j += 1) b[j] = den[j] > 0.02 ? b[j] / den[j] : crop[c][j];
+          return b;
+        });
+        const low = [0, 1, 2].map((c) => blur(crop[c], cw, ch, fine));
+        const amount = Math.min(1, s * 1.25);
+        let healed = 0;
+        for (let j = 0; j < m; j += 1) {
+          if (maskSoft[j] < 0.05) continue;
+          const red = low[0][j] - 0.5 * (low[1][j] + low[2][j]) - (base[0][j] - 0.5 * (base[1][j] + base[2][j]));
+          const dark = lumaOf(base[0][j], base[1][j], base[2][j]) - lumaOf(low[0][j], low[1][j], low[2][j]);
+          // A raised mark is also a bump of light and shadow; even it out when it is local (the mask already spares edges).
+          const bump = smoothstep(0.025, 0.07, Math.abs(dark));
+          const spot = Math.max(smoothstep(0.012, 0.05, red), smoothstep(0.03, 0.09, dark) * 0.7, bump * 0.8);
+          const w = spot * Math.min(1, maskSoft[j] * 1.4) * amount;
+          if (w < 0.01) continue;
+          healed += 1;
+          for (let c = 0; c < 3; c += 1) crop[c][j] += (base[c][j] - low[c][j]) * w;
+        }
+        report.steps.push({ step: "blemish", healed });
       }
       for (let y = 0; y < ch; y += 1) {
         for (let x = 0; x < cw; x += 1) {
