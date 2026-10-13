@@ -6,7 +6,7 @@
 import fs from "node:fs/promises";
 
 export const DEFAULT_RETOUCH_STRENGTH = 0.5;
-export const ALL_STEPS = ["balance", "tone", "warmth", "smooth", "redness", "sharpen"];
+export const ALL_STEPS = ["balance", "tone", "warmth", "smooth", "redness", "teeth", "sharpen"];
 const MAX_PIXELS = 100_000_000;
 
 // What healthy skin looks like in R/G and B/G once the light is neutral. A photo whose face sits outside
@@ -227,6 +227,162 @@ export function castOf(skin) {
 }
 
 // ---- the retouch ----------------------------------------------------------------------------------
+
+/**
+ * Teeth whitening. Teeth are found in the mouth area of the face box as pixels much brighter than their surroundings
+ * (lips and beard) and much less red for their brightness than skin: confident seeds, grown through looser tooth-like
+ * pixels connected to the strongest seed, with short gaps along the row bridged (a stain or the line between two teeth)
+ * and stray fragments dropped. They are evened out a little, lose most of their yellow and are lifted gently, capped
+ * short of glowing white, so they read as clean teeth rather than veneers. A face with its mouth closed finds nothing.
+ */
+function whitenTeeth({ R, G, B, alpha, width, height, box, s }) {
+  const x0 = clamp(Math.round(width * (box.x + box.w * 0.12)), 0, width - 1);
+  const x1 = clamp(Math.round(width * (box.x + box.w * 0.88)), x0 + 1, width);
+  const y0 = clamp(Math.round(height * (box.y + box.h * 0.5)), 0, height - 1);
+  const y1 = clamp(Math.round(height * (box.y + box.h * 0.97)), y0 + 1, height);
+  const cw = x1 - x0;
+  const ch = y1 - y0;
+  const fh = box.h * height;
+  if (cw < 16 || ch < 16 || fh < 64) return { found: 0 };
+  const m = cw * ch;
+  // Skin reference from the cheek band above the mouth.
+  const cheek = [];
+  for (let y = Math.round(height * (box.y + box.h * 0.4)); y < Math.round(height * (box.y + box.h * 0.55)); y += 2) {
+    for (let x = x0; x < x1; x += 2) {
+      const i = y * width + x;
+      if (alpha[i] > 250) cheek.push(lumaOf(R[i], G[i], B[i]));
+    }
+  }
+  cheek.sort((a, b) => a - b);
+  const skinY = cheek.length ? cheek[Math.floor(cheek.length / 2)] : 0.55;
+  const Yc = new Float32Array(m);
+  for (let y = 0; y < ch; y += 1) for (let x = 0; x < cw; x += 1) { const i = (y + y0) * width + x + x0; Yc[y * cw + x] = lumaOf(R[i], G[i], B[i]); }
+  const localY = blur(Yc, cw, ch, fh * 0.06);
+  const strict = new Float32Array(m);
+  const loose = new Float32Array(m);
+  for (let y = 0; y < ch; y += 1) {
+    for (let x = 0; x < cw; x += 1) {
+      const j = y * cw + x;
+      const i = (y + y0) * width + x + x0;
+      if (alpha[i] < 250) continue;
+      const Y = Yc[j];
+      const mx = Math.max(R[i], G[i], B[i]);
+      const sat = mx > 0 ? (mx - Math.min(R[i], G[i], B[i])) / mx : 0;
+      const redness = (R[i] - G[i]) / Math.max(Y, 0.05);
+      const ex = (x / cw - 0.5) / 0.5;
+      const ey = (y / ch - 0.42) / 0.55;
+      const d = Math.hypot(ex, ey);
+      strict[j] = smoothstep(0.05, 0.13, Y - localY[j]) * smoothstep(skinY * 0.9, skinY * 1.1, Y) * (1 - smoothstep(0.27, 0.34, redness)) * (1 - smoothstep(0.36, 0.46, sat)) * (1 - smoothstep(0.75, 1, d));
+      loose[j] = smoothstep(-0.04, 0.03, Y - localY[j]) * smoothstep(skinY * 0.6, skinY * 0.8, Y) * (1 - smoothstep(0.36, 0.46, redness)) * (1 - smoothstep(0.85, 1, d));
+    }
+  }
+  const dense = blur(strict, cw, ch, fh * 0.01);
+  let seed = -1;
+  let best = 0.5;
+  for (let j = 0; j < m; j += 1) if (strict[j] > 0.5 && dense[j] > best) { best = dense[j]; seed = j; }
+  if (seed < 0) return { found: 0 };
+  const grown = new Uint8Array(m);
+  const band = fh * 0.09;
+  const seedRow = Math.floor(seed / cw);
+  let top = 0;
+  let bottom = ch - 1;
+  const grow = (stack) => {
+    while (stack.length) {
+      const j = stack.pop();
+      const x = j % cw;
+      const y = (j - x) / cw;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || nx >= cw || ny < top || ny > bottom || Math.abs(ny - seedRow) > band) continue;
+        const k = ny * cw + nx;
+        if (grown[k] || !(loose[k] > 0.25 || strict[k] > 0.3)) continue;
+        grown[k] = 1;
+        stack.push(k);
+      }
+    }
+  };
+  grown[seed] = 1;
+  grow([seed]);
+  top = ch;
+  bottom = 0;
+  for (let j = 0; j < m; j += 1) if (grown[j]) { const y = (j - (j % cw)) / cw; top = Math.min(top, y); bottom = Math.max(bottom, y); }
+  const reach = Math.round(fh * 0.05);
+  for (let round = 0; round < 3; round += 1) {
+    const stack = [];
+    for (let y = top; y <= bottom; y += 1) {
+      const near = new Uint8Array(cw);
+      let last = -1e9;
+      for (let x = 0; x < cw; x += 1) { if (grown[y * cw + x]) last = x; else if (x - last <= reach) near[x] = 1; }
+      last = 1e9;
+      for (let x = cw - 1; x >= 0; x -= 1) { if (grown[y * cw + x]) last = x; else if (last - x <= reach) near[x] = 1; }
+      for (let x = 0; x < cw; x += 1) { const j = y * cw + x; if (near[x] && !grown[j] && loose[j] > 0.25) { grown[j] = 1; stack.push(j); } }
+    }
+    if (!stack.length) break;
+    grow(stack);
+  }
+  // Drop stray fragments: keep connected pieces of at least 3% of the largest.
+  const label = new Int32Array(m);
+  const sizes = [0];
+  for (let j = 0; j < m; j += 1) {
+    if (!grown[j] || label[j]) continue;
+    const id = sizes.length;
+    let size = 0;
+    const stack = [j];
+    label[j] = id;
+    while (stack.length) {
+      const k = stack.pop();
+      size += 1;
+      const x = k % cw;
+      const y = (k - x) / cw;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || nx >= cw || ny < 0 || ny >= ch) continue;
+        const q = ny * cw + nx;
+        if (grown[q] && !label[q]) { label[q] = id; stack.push(q); }
+      }
+    }
+    sizes.push(size);
+  }
+  const largest = Math.max(...sizes);
+  const keep = new Float32Array(m);
+  for (let j = 0; j < m; j += 1) if (label[j] && sizes[label[j]] >= largest * 0.03) keep[j] = 1;
+  const closed = blur(keep, cw, ch, Math.max(1, fh * 0.006));
+  const amount = Math.min(1, s * 1.3);
+  // Even the teeth out a little first: stains and specks are small and the surface is smooth.
+  const soft = [R, G, B].map((P) => {
+    const plane = new Float32Array(m);
+    for (let y = 0; y < ch; y += 1) for (let x = 0; x < cw; x += 1) plane[y * cw + x] = P[(y + y0) * width + x + x0];
+    return blur(plane, cw, ch, Math.max(1, fh * 0.004));
+  });
+  let found = 0;
+  for (let y = 0; y < ch; y += 1) {
+    for (let x = 0; x < cw; x += 1) {
+      const j = y * cw + x;
+      const weight = smoothstep(0.25, 0.6, closed[j]) * Math.max(loose[j], strict[j], 0.6 * closed[j]);
+      const k = Math.min(1, weight * 1.3) * amount;
+      if (k < 0.01) continue;
+      found += 1;
+      const i = (y + y0) * width + x + x0;
+      let r = R[i] + (soft[0][j] - R[i]) * 0.5 * k;
+      let g = G[i] + (soft[1][j] - G[i]) * 0.5 * k;
+      let b = B[i] + (soft[2][j] - B[i]) * 0.5 * k;
+      const Y = lumaOf(r, g, b);
+      const chroma = 1 - 0.45 * k;
+      const lift = 1 + 0.06 * k;
+      r = (Y + (r - Y) * chroma) * lift;
+      g = (Y + (g - Y) * chroma) * lift;
+      b = (Y + (b - Y) * chroma) * lift;
+      const peak = Math.max(r, g, b);
+      if (peak > 0.9) { r *= 0.9 / peak; g *= 0.9 / peak; b *= 0.9 / peak; }
+      R[i] = clamp(r, 0, 1);
+      G[i] = clamp(g, 0, 1);
+      B[i] = clamp(b, 0, 1);
+    }
+  }
+  return { found, skinY };
+}
 
 /**
  * Retouches an RGBA image. `rgba` is a Buffer (8-bit, straight alpha). The cut-out carries the photo's own
@@ -460,6 +616,9 @@ export function retouchPixels({ rgba, channels = 4, width, height, box, strength
       }
     }
   }
+
+  // 5b. Teeth: found in the lower face without landmarks, then taken from yellow to a natural off-white.
+  if (on.has("teeth")) report.steps.push({ step: "teeth", ...whitenTeeth({ R, G, B, alpha, width, height, box: faceBox, s }) });
 
   // 6. Unsharp mask on the luma of the whole subject, weighted by alpha so the cut-out's edge does not halo; gentler on skin.
   if (on.has("sharpen")) {

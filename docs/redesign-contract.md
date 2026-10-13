@@ -300,9 +300,10 @@ at 0.5 the skin keeps its pores and the beard its texture, at 1 it starts to loo
    B/G are pulled toward a healthy band (R/G 1.14 to 1.40, B/G 0.74 to 0.90), never past its edge, gains held within 0.85 to 1.2
    and luma preserved.
 2. *Exposure and levels*, one luma curve applied as a luma ratio so hue and saturation hold: the skin's median luma is brought
-   toward 0.5 by gamma (gamma 0.7 to 1.15, so a healthy face is left alone and a face over 0.72 eases down), lifted shadows are
-   weighted away from black (below luma 0.07 nothing moves, so a black T-shirt stays black), and a gentle sine S-curve of
-   contrast (0.16 x strength). Highlights keep their hue rather than clipping a channel.
+   toward 0.58 by gamma (gamma 0.7 to 1.15, so a face below that is lifted, one between 0.58 and 0.72 is left alone and one
+   over 0.72 eases down), lifted shadows are weighted away from black (below luma 0.07 nothing moves, so a black T-shirt
+   stays black), and a gentle sine S-curve of contrast (0.08 x strength) pivoted on the lifted skin, so contrast deepens
+   what is darker than the face and never pulls the skin itself duller. Highlights keep their hue rather than clipping a channel.
 3. *Warmth and vibrance* on the mid-tones: R up and B down by up to 3.5%, capped so the skin's R/G never passes the band's top
    plus 0.05 (never orange), and a saturation lift that favours weakly saturated colours.
 4. *Skin smoothing*, edge-preserving: a guided filter (guide: luma, radius 1.1% of the face height, eps 0.0025, two passes)
@@ -312,6 +313,11 @@ at 0.5 the skin keeps its pores and the beard its texture, at 1 it starts to loo
    by the subject's own colour spread outward, so the rim does not darken.
 5. *Redness*: skin redder than its surroundings (R minus the mean of G and B, against a large local average) is reduced by
    0.75 x strength in the mask, giving a quarter of it back to G and B so a spot does not turn into a dark patch.
+   *Teeth* (after redness): teeth are found in the mouth area of `faceBox` without landmarks, as pixels much brighter than
+   their surroundings and much less red for their brightness than skin. Confident seeds are grown through looser tooth-like
+   pixels connected to the strongest seed, short gaps along the row are bridged, and stray fragments dropped. They are evened
+   out a little, lose up to 45% of their chroma and gain up to 6% in brightness, capped at 0.9 so they read as clean teeth,
+   not veneers. A closed mouth finds nothing.
 6. *Sharpening*: a luma unsharp mask over the whole subject (fine radius 0.07% of the height, 0.55 x strength, plus a wide
    "clarity" term of 0.18 x strength), alpha-weighted so the outline does not halo, 40% gentler on skin and clamped to
    +-0.09 per pixel.
@@ -651,7 +657,9 @@ claude -p --output-format stream-json --verbose
   if either breaks, the design image and `{version, warnings}` still come back.
   On validation errors it returns `isError: true` with the list.
 - `find_faces({expression?, gesture?, gaze?, minGrade?, count?})` and `use_face({id, mirror?})`: the owner's face pack, see "Face pack". Allowed in standard and further turns.
-- `cut_out({asset})`: removes the background of `assets/<asset>` and writes
+- `cut_out({asset})` (and every face-pack cut-out): the image is turned upright, the background-removal model gives only the
+  transparency, and the colour is the photo's own at full depth. The library's own PNG is a 256-colour palette image whose
+  dithering turned skin and teeth into speckles, so it is never used for colour. It removes the background of `assets/<asset>` and writes
   `assets/<stem>-cutout.png` (never overwriting: `-2`, `-3` ... when the name is taken, so `face.jpg`
   and `face.png` do not collide). It returns `{name, width, height, from}`; the server registers it
   from that result. Images over 100 megapixels are refused.

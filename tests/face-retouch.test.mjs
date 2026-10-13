@@ -354,3 +354,41 @@ test("use_face takes retouched.png when the effective retouch is on and done, ot
   assert.equal(retouchStrengthFor({}, { retouchStrength: 0.7 }), 0.7);
   assert.equal(faceImageFile({ retouched: { state: "done" } }, { retouchAll: true }), "retouched.png");
 });
+
+/** The synthetic face with an open smile: a row of yellowish teeth between red lips in the lower face. */
+function smilingFace({ open = true } = {}) {
+  const rgba = syntheticFace({ blotch: false });
+  const lip = [150, 70, 62];
+  const tooth = [222, 196, 150];
+  for (let y = 300; y < 336; y += 1) {
+    for (let x = 140; x < 260; x += 1) {
+      const i = (y * W + x) * 4;
+      const inLip = y < 306 || y >= 330;
+      const c = !open || inLip ? lip : (x - 140) % 20 === 0 ? [120, 80, 70] : tooth; // a dark line between teeth
+      rgba[i] = c[0];
+      rgba[i + 1] = c[1];
+      rgba[i + 2] = c[2];
+    }
+  }
+  return rgba;
+}
+const yellowness = (rgba, x0, x1, y0, y1) => {
+  let s = 0;
+  let n = 0;
+  for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) { const i = (y * W + x) * 4; s += (rgba[i] + rgba[i + 1]) / 2 - rgba[i + 2]; n += 1; }
+  return s / n;
+};
+
+test("teeth are found in an open smile and lose their yellow; lips and a closed mouth are left alone", () => {
+  const src = smilingFace();
+  const { data, report } = run(src, { strength: 0.75, steps: ["teeth"] });
+  assert.ok(report.steps[0].found > 500, `teeth found: ${report.steps[0].found}`);
+  // Every tooth along the row, not just the brightest one, loses most of its yellow.
+  for (const x0 of [145, 185, 225, 245]) assert.ok(yellowness(data, x0, x0 + 10, 310, 326) < yellowness(src, x0, x0 + 10, 310, 326) * 0.75, `tooth at x ${x0}`);
+  // The lips keep their colour.
+  assert.ok(Math.abs(yellowness(data, 150, 250, 300, 304) - yellowness(src, 150, 250, 300, 304)) < 4, "upper lip");
+  // Nothing is whitened past an off-white.
+  for (let i = 0; i < data.length; i += 4) if (Math.max(data[i], data[i + 1], data[i + 2]) > 231 && Math.max(src[i], src[i + 1], src[i + 2]) <= 231) assert.fail("whitened past the cap");
+  const closed = smilingFace({ open: false });
+  assert.equal(run(closed, { strength: 0.75, steps: ["teeth"] }).report.steps[0].found, 0);
+});

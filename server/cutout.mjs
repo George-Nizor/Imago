@@ -12,13 +12,28 @@ export async function cutOutBytes(bytes) {
   if (!info) throw new Error("Not a PNG, JPEG or WebP image.");
   // The decoder inside the library allocates width x height x 4 bytes, so refuse oversized images first.
   if (tooManyPixels(info)) throw new Error(`Over ${MAX_PIXELS / 1_000_000} megapixels.`);
+  const sharp = (await import("sharp")).default;
+  // Upright first, losslessly, so the mask and the pixels it is applied to are the same image.
+  const upright = await sharp(bytes, { limitInputPixels: MAX_PIXELS }).rotate().png({ compressionLevel: 1 }).toBuffer();
   // Imported late: it pulls in onnxruntime, which only this call needs.
   const { removeBackground } = await import("@imgly/background-removal-node");
-  const blob = await removeBackground(new Blob([bytes], { type: MIME[info.type] }), { output: { format: "image/png" } });
-  const png = Buffer.from(await blob.arrayBuffer());
-  const out = imageInfo(png);
-  if (!out) throw new Error("Background removal produced no image.");
-  return { png, width: out.width, height: out.height };
+  const blob = await removeBackground(new Blob([upright], { type: MIME.png }), { output: { format: "image/png" } });
+  const removed = Buffer.from(await blob.arrayBuffer());
+  if (!imageInfo(removed)) throw new Error("Background removal produced no image.");
+  // The library's PNG is a 256-colour palette image: skin and teeth come back dithered into speckles, which any
+  // retouching then makes worse. Only its transparency is used; the colour is the photo's own, at full depth.
+  const mask = await sharp(removed).ensureAlpha().extractChannel(3).raw().toBuffer({ resolveWithObject: true });
+  const base = await sharp(upright).removeAlpha().toColourspace("srgb").raw().toBuffer({ resolveWithObject: true });
+  if (base.info.width !== mask.info.width || base.info.height !== mask.info.height) {
+    const png = await sharp(removed).ensureAlpha().png().toBuffer();
+    return { png, width: mask.info.width, height: mask.info.height };
+  }
+  const { width, height } = base.info;
+  const png = await sharp(base.data, { raw: { width, height, channels: 3 } })
+    .joinChannel(mask.data, { raw: { width, height, channels: 1 } })
+    .png()
+    .toBuffer();
+  return { png, width, height };
 }
 
 /** Cuts out the image at `source` and writes the PNG to `destination` (the face pack's one call). */
