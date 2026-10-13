@@ -12,7 +12,8 @@ const MAX_PIXELS = 100_000_000;
 // What healthy skin looks like in R/G and B/G once the light is neutral. A photo whose face sits outside
 // this band has a cast; white balance moves it toward the band and never past its edge.
 const SKIN_BAND = { rg: [1.14, 1.4], bg: [0.74, 0.9] };
-const TARGET_LUMA = 0.5;
+// Flattering portraits sit a little above middle grey: skin below this is lifted toward it.
+const TARGET_LUMA = 0.58;
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const smoothstep = (a, b, x) => {
   const t = clamp((x - a) / (b - a), 0, 1);
@@ -280,14 +281,19 @@ export function retouchPixels({ rgba, channels = 4, width, height, box, strength
     const Ls = measured?.luma ?? skinMedian;
     const wanted = Ls < TARGET_LUMA ? Math.log(TARGET_LUMA) / Math.log(Math.max(Ls, 0.05)) : Ls > 0.72 ? Math.log(0.68) / Math.log(Ls) : 1;
     const gamma = clamp(1 + (wanted - 1) * Math.min(1, s * 1.1), 0.7, 1.15);
-    const contrast = 0.16 * s;
+    const contrast = 0.08 * s;
+    // The S-curve pivots on the (lifted) skin itself, so contrast deepens what is darker than the face and
+    // brightens what is lighter, and never pulls the skin down into a duller tone.
+    const pivot = clamp(Math.pow(Ls, gamma), 0.2, 0.8);
     const lut = new Float32Array(1025);
     for (let k = 0; k <= 1024; k += 1) {
       const y = k / 1024;
       const lifted = Math.pow(y, gamma);
       const guard = smoothstep(0.07, 0.3, y); // blacks stay black
       let v = y + (lifted - y) * guard;
-      v = v - (contrast * Math.sin(2 * Math.PI * v)) / (2 * Math.PI);
+      const t = v < pivot ? (0.5 * v) / pivot : 0.5 + (0.5 * (v - pivot)) / (1 - pivot);
+      const t2 = t - (contrast * Math.sin(2 * Math.PI * t)) / (2 * Math.PI);
+      v = t2 < 0.5 ? (t2 / 0.5) * pivot : pivot + ((t2 - 0.5) / 0.5) * (1 - pivot);
       lut[k] = clamp(v, 0, 1);
     }
     for (let i = 0; i < n; i += 1) {
@@ -312,7 +318,7 @@ export function retouchPixels({ rgba, channels = 4, width, height, box, strength
       G[i] = g;
       B[i] = b;
     }
-    report.steps.push({ step: "tone", gamma, contrast, from: Ls });
+    report.steps.push({ step: "tone", gamma, contrast, pivot, from: Ls });
   }
 
   // 3. A little warmth and vibrance on the mid-tones, capped so skin never turns orange.
