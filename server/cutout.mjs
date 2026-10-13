@@ -64,40 +64,17 @@ export async function cutOut(projectDir, asset) {
 }
 
 /**
- * The model sometimes leaves bright areas inside the subject (teeth, eye whites) a few levels short of opaque. Anything
- * more than a few pixels from the background, which is what is reachable from the image border through clearly
- * transparent pixels, is made fully opaque; the soft edge itself (hair, the outline) is left exactly as the model gave it.
+ * The model sometimes leaves bright areas inside the subject (teeth, eye whites) a few levels short of opaque. Pixels that
+ * are already nearly opaque (200 or more) and more than a few pixels from anything clearly transparent are made fully
+ * opaque. Clearly transparent areas stay transparent wherever they are, including background enclosed by the subject (the
+ * gap between a raised arm and the head), and the soft edge is left exactly as the model gave it.
  */
 export function solidInterior(alpha, width, height, margin = 6) {
   const n = width * height;
-  const background = new Uint8Array(n);
-  const stack = [];
-  const visit = (i) => {
-    if (!background[i] && alpha[i] < 128) {
-      background[i] = 1;
-      stack.push(i);
-    }
-  };
-  for (let x = 0; x < width; x += 1) {
-    visit(x);
-    visit((height - 1) * width + x);
-  }
-  for (let y = 0; y < height; y += 1) {
-    visit(y * width);
-    visit(y * width + width - 1);
-  }
-  while (stack.length) {
-    const i = stack.pop();
-    const x = i % width;
-    if (x > 0) visit(i - 1);
-    if (x < width - 1) visit(i + 1);
-    if (i >= width) visit(i - width);
-    if (i < n - width) visit(i + width);
-  }
-  // Chamfer distance from the background, two passes.
   const far = 1e6;
+  // Chamfer distance from the nearest clearly transparent pixel, two passes.
   const dist = new Float32Array(n);
-  for (let i = 0; i < n; i += 1) dist[i] = background[i] ? 0 : far;
+  for (let i = 0; i < n; i += 1) dist[i] = alpha[i] < 128 ? 0 : far;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const i = y * width + x;
@@ -113,6 +90,6 @@ export function solidInterior(alpha, width, height, margin = 6) {
     }
   }
   const out = Buffer.from(alpha);
-  for (let i = 0; i < n; i += 1) if (dist[i] > margin) out[i] = 255;
+  for (let i = 0; i < n; i += 1) if (alpha[i] >= 200 && dist[i] > margin) out[i] = 255;
   return out;
 }

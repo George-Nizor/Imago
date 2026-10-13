@@ -406,10 +406,12 @@ test("a cut-out's interior is made solid, its soft edge is left as the model gav
     }
   }
   for (let y = 26; y < 34; y += 1) for (let x = 26; x < 34; x += 1) alpha[y * w + x] = 246; // "teeth" a little see-through
+  for (let y = 14; y < 20; y += 1) for (let x = 14; x < 20; x += 1) alpha[y * w + x] = 0; // background enclosed by the subject
   const out = solidInterior(alpha, w, h);
   assert.equal(out[30 * w + 30], 255, "interior made solid");
+  assert.equal(out[16 * w + 16], 0, "enclosed background stays transparent");
   for (let i = 0; i < w * h; i += 1) {
     const d = Math.hypot((i % w) - 30, Math.floor(i / w) - 30);
-    if (d >= 19) assert.equal(out[i], alpha[i], `edge pixel ${i} untouched`);
+    if (d >= 19 || alpha[i] < 200) assert.equal(out[i], alpha[i], `pixel ${i} untouched`);
   }
 });
