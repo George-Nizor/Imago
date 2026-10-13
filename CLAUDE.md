@@ -17,8 +17,9 @@ changes the behaviour. [README.md](README.md) covers running it.
 | `server/render-mcp.mjs` | Stdio MCP server given to claude: `render` and `cut_out` |
 | `server/validate.mjs` | The `design.html` rules |
 | `server/capabilities.mjs` | Whether claude and the renderer are ready |
-| `server/presets/` | `design-rules.md`, one prompt per preset, reference material |
-| `render/render.cjs` | design.html to png, jpg or webp |
+| `server/presets/` | `design-rules.md`, one prompt per preset, `planner.md` and `concept.md`, and `craft/<preset>/` (copied into each project's `reference/craft/` every turn) |
+| `render/render.cjs` | design.html to png, jpg or webp; with `--measure`/`--feed` also the DOM and pixel measurements and the feed mock-up capture |
+| `server/checks.mjs`, `feed.mjs`, `feed-markup.mjs`, `feed.css` | The render checks, the feed mock-up's staging, and its markup and styles (shared with the UI's `FeedPreview`) |
 | `web/` | Vite, React, TypeScript UI; `web/src/api/mock.ts` is the `?mock=1` backend |
 
 ## Testing without spending usage
@@ -66,5 +67,6 @@ Chromium with `?mock=1`.
   folder and `/fonts/`, serves the page under a CSP with no `script-src`, denies popups and
   navigation and disables WebRTC. The validator is a backstop (tag names and `on*` attributes are
   matched whatever follows them). Keep validation and the renderer in step.
+- **Feed mock-up.** After a thumbnail render the MCP also returns a feed image and `checks`; neither may fail the render. The feed page is staged in a temp folder (it may read nothing else) and every string in it is escaped in `feed-markup.mjs`. The renderer must not exit when the design window closes (`window-all-closed` is handled). Thresholds and sources: the contract's "Feed mock-up and checks".
 - **Brand assets are copies.** `web/public/brand/` and `web/src/brand/imago-icons.ts` come from
   `Instrumenta/brand/`. Regenerate them there; do not edit them here.

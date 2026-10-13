@@ -12,6 +12,8 @@ export default defineConfig({
   build: { outDir: "dist", emptyOutDir: true, sourcemap: false, target: "es2022" },
   server: {
     host: "127.0.0.1",
+    // The feed mock-up markup and styles live in ../server so the renderer and the UI share them.
+    fs: { allow: [fileURLToPath(new URL("..", import.meta.url))] },
     port: 5173,
     proxy: { "/api": target, "/projects": target, "/fonts": target },
   },

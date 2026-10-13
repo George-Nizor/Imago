@@ -10,3 +10,6 @@ import "./presets.test.mjs";
 import "./further.test.mjs";
 import "./hardening.test.mjs";
 import "./library.test.mjs";
+import "./checks.test.mjs";
+import "./feed.test.mjs";
+import "./render-feed.test.mjs";

@@ -24,8 +24,11 @@ export class RenderError extends Error {
   }
 }
 
-/** Renders `htmlFile` (width x height CSS px) to `out`. Resolves {width,height,bytes}. */
-export async function renderHtml(config, { htmlFile, width, height, scale = 1, format = "png", out }) {
+/**
+ * Renders `htmlFile` (width x height CSS px) to `out`. Resolves {width,height,bytes}; `measure: true`
+ * adds the measurements and `feedJob` (a job.json path, see render.cjs) the feed mock-up render.
+ */
+export async function renderHtml(config, { htmlFile, width, height, scale = 1, format = "png", out, measure = false, feedJob }) {
   if (!config.electronBin || !fs.existsSync(config.electronBin)) throw new RenderError("The renderer (Electron) is not installed. Run npm install.");
   await fs.promises.mkdir(path.dirname(out), { recursive: true });
   let stdout = "";
@@ -41,6 +44,8 @@ export async function renderHtml(config, { htmlFile, width, height, scale = 1, f
       `--format=${format}`,
       `--out=${out}`,
       `--fonts=${config.fontsDir}`,
+      ...(measure ? ["--measure"] : []),
+      ...(feedJob ? [`--feed=${feedJob}`] : []),
     ],
     cwd: path.dirname(htmlFile),
     env: electronEnv(config),

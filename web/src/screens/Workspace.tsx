@@ -6,6 +6,7 @@ import { Btn, Spinner } from "../components.js";
 import { useDeleteWithUndo, useSeries, useToast } from "../library/hooks.js";
 import { Glyph, MenuButton, SeriesDialog } from "../library/ui.js";
 import { RenameInput } from "./Library.js";
+import { FeedView } from "./FeedView.js";
 import { Credits, FurtherBar, ModelBadge } from "../further.js";
 import { creditLine } from "../further-lib.js";
 import { errorText, fmtSize, navigate, runErrorText } from "../lib.js";
@@ -30,6 +31,7 @@ export function Workspace({ id }: { id: string }) {
   const [missing, setMissing] = useState("");
   const [run, setRun] = useState<Run>(IDLE);
   const [presets, setPresets] = useState<PresetInfo[]>([]);
+  const [view, setView] = useState<"design" | "feed">("design");
 
   const reload = useCallback(() => {
     api.getProject(id).then(setProject).catch(() => {});
@@ -73,7 +75,7 @@ export function Workspace({ id }: { id: string }) {
           setRun((r) => ({ ...r, draft: 0 }));
           setProject((p) =>
             p && !p.versions.some((v) => v.n === e.version)
-              ? { ...p, current: e.version, versions: [...p.versions, { n: e.version, at: new Date().toISOString(), warnings: e.warnings }] }
+              ? { ...p, current: e.version, versions: [...p.versions, { n: e.version, at: new Date().toISOString(), warnings: e.warnings, ...(e.checks ? { checks: e.checks } : {}) }] }
               : p && { ...p, current: e.version },
           );
           break;
@@ -105,7 +107,12 @@ export function Workspace({ id }: { id: string }) {
     <div className="workspace">
       <section className="stage-col" aria-label="Preview">
         <Toolbar project={project} run={run} onProject={setProject} />
-        <Preview project={project} run={run} />
+        {project.preset === "thumbnail" && project.current ? <ViewTabs view={view} onView={setView} project={project} /> : null}
+        {view === "feed" && project.preset === "thumbnail" && project.current ? (
+          <div className="preview feed-scroll"><FeedView project={project} /></div>
+        ) : (
+          <Preview project={project} run={run} />
+        )}
         <Credits project={project} />
         <VersionStrip project={project} disabled={run.running} onRestore={(n) => api.restore(id, n).then(setProject).catch((e) => setRun((r) => ({ ...r, error: errorText(e), detail: "" })))} />
       </section>
@@ -124,6 +131,20 @@ export function Workspace({ id }: { id: string }) {
         }}
         onStop={() => api.cancel(id).catch(() => {})}
       />
+    </div>
+  );
+}
+
+function ViewTabs({ view, onView, project }: { view: "design" | "feed"; onView: (v: "design" | "feed") => void; project: Project }) {
+  const warns = project.versions.find((v) => v.n === project.current)?.checks?.filter((c) => c.level === "warn").length ?? 0;
+  return (
+    <div className="view-tabs">
+      <div className="seg" role="radiogroup" aria-label="View">
+        <button type="button" role="radio" aria-checked={view === "design"} className={view === "design" ? "on" : ""} onClick={() => onView("design")}>Design</button>
+        <button type="button" role="radio" aria-checked={view === "feed"} className={view === "feed" ? "on" : ""} onClick={() => onView("feed")}>
+          In the feed{warns ? <span className="mono muted"> {warns} to look at</span> : null}
+        </button>
+      </div>
     </div>
   );
 }

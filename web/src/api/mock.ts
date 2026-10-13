@@ -6,6 +6,7 @@ import type {
   Api,
   AssetInfo,
   Capabilities,
+  Check,
   CreateBody,
   PresetInfo,
   Project,
@@ -100,9 +101,20 @@ function touch(p: MockProject) {
   p.updatedAt = new Date().toISOString();
   emit(p.id, { type: "project", project: strip(p) });
 }
+const MOCK_CHECKS: Check[] = [
+  { id: "text.words", level: "ok", value: 3, message: "3 words." },
+  { id: "text.repeatsTitle", level: "warn", value: 0.67, message: "67% of the text repeats the video title. Add something the title does not say, or drop it." },
+  { id: "text.smallest", level: "warn", value: 5.4, message: "\"watch live\" is 5.4 px tall at 168 px wide (floor 7). Make it at least 54px, or cut it." },
+  { id: "text.contrast", level: "ok", value: 7.9, message: "Weakest text contrast is 7.9:1." },
+  { id: "layout.badge", level: "ok", value: true, message: "Duration badge zone is clear." },
+  { id: "subject.size", level: "info", value: null, message: "No cut-out subject." },
+  { id: "image.contrast", level: "info", value: 0.71, message: "Luminance spread 0.71. Within 0.55 to 0.95." },
+  { id: "image.colourfulness", level: "info", value: 41.2, message: "Colourfulness 41.2. Vivid." },
+  { id: "feed.distinct", level: "info", value: 31.5, message: "Stands out: average colour difference 31.5 from stand-in thumbnails (closest 22.4)." },
+];
 function addVersion(p: MockProject): number {
   const n = (p.versions.at(-1)?.n ?? 0) + 1;
-  p.versions.push({ n, at: new Date().toISOString(), warnings: [] });
+  p.versions.push({ n, at: new Date().toISOString(), warnings: [], ...(p.preset === "thumbnail" ? { checks: MOCK_CHECKS } : {}) });
   p.renders[n] = placeholder(p.size, p.title, n, HUES[(n + p.id.length) % HUES.length]!);
   p.current = n;
   return n;
@@ -118,6 +130,8 @@ function seed(title: string, preset: Project["preset"], versions: number, ageMin
   projects.set(id, p);
 }
 seed("Rocket launch thumbnail", "thumbnail", 3, 25);
+seed("Why I quit my job", "thumbnail", 2, 60 * 3);
+seed("Budget gaming PC build", "thumbnail", 1, 60 * 8);
 seed("Beach sunset retouch", "photo", 2, 60 * 5);
 seed("Spring sale poster", "graphic", 4, 60 * 30);
 seed("Channel banner", "graphic", 1, 60 * 70);
@@ -186,7 +200,7 @@ async function runTurn(p: MockProject, text: string, mode: TurnMode = "standard"
   await wait(1500);
   if (cancelled.has(id)) return stopped(p);
   const n = addVersion(p);
-  emit(id, { type: "render.done", version: n, url: `/projects/${id}/renders/v${n}.png`, warnings: [] });
+  emit(id, { type: "render.done", version: n, url: `/projects/${id}/renders/v${n}.png`, warnings: [], ...(p.preset === "thumbnail" ? { checks: MOCK_CHECKS, feedUrl: `/projects/${id}/renders/v${n}-feed.png` } : {}) });
   await wait(700);
   if (further && !p.assets.some((a) => a.kind === "stock")) {
     p.assets.push({ name: "stock-rocket-night.jpg", kind: "stock", width: 4000, height: 2667, from: null, credit: "Joel Kowsky / NASA", license: "CC BY 2.0", licenseUrl: "https://creativecommons.org/licenses/by/2.0/", source: "flickr" });
@@ -388,6 +402,7 @@ export const mockApi: Api = {
       set!.delete(onEvent);
     };
   },
+  feedUrl: () => "",
   renderUrl: (id, n) => projects.get(id)?.renders[n] ?? "",
   designUrl(id, _nonce) {
     const p = projects.get(id);

@@ -100,7 +100,7 @@ Claude is told the same rules the server enforces on `design.html`:
 - HTML, CSS and inline SVG only. No scripts, event attributes, frames or external links.
 - No network. Every `src`, `href` and `url()` is a project file such as `assets/face.png`, or a
   `data:` URL.
-- Fonts come from the bundled set in `fonts/` (Anton, Bebas Neue, Inter, Playfair Display and others).
+- Fonts come from the bundled set in `fonts/` (Anton, Archivo, Bebas Neue, Inter, Playfair Display and others; licences in `fonts/licenses/`).
 - At most four renders per turn: write, render, look, fix, stop.
 
 Errors fail the render with a message Claude can act on. Warnings render and are passed back.

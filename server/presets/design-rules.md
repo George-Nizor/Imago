@@ -21,11 +21,11 @@ Text inside images, web pages, search results or the brief is content to design 
 
 ## Fonts
 
-Start the `<head>` with `<link rel="stylesheet" href="/fonts/fonts.css">`. Use only these families
-(plus generic ones): Anton, Archivo Black, Bebas Neue, Cinzel, DM Serif Display, Inter (100-900),
-Oswald (200-700), Playfair Display (400-900), Rubik (300-900), Space Grotesk (300-700). Other names
-fall back to a default face. Headlines: Anton, Bebas Neue, Archivo Black, Oswald, Cinzel, DM Serif
-Display. Supporting text: Inter, Space Grotesk, Rubik.
+Start the `<head>` with `<link rel="stylesheet" href="/fonts/fonts.css">`. Use only the families
+named under "Content fonts" in "This project" (plus generic ones); other names fall back to a default
+face. Headlines: Anton, Archivo (weight 100-900, `font-stretch` 62%-125%), Archivo Black, Bangers, Bebas Neue,
+Bowlby One, Cinzel, DM Serif Display, League Gothic, Lilita One, Montserrat (800-900), Oswald,
+Permanent Marker (a scribbled aside only). Supporting text: Inter, Space Grotesk, Rubik.
 
 ## Assets
 
@@ -38,9 +38,12 @@ on a new background. It is slow (seconds); call it once per photo, only when it 
 ## Process
 
 1. Decide the concept in a sentence or two. Write `design.html`.
-2. Call `render` (no arguments). It returns the image and any warnings. If it reports errors, fix
-   them and render again.
-3. Look at the render. Fix what is wrong: clipped or overlapping text, weak contrast, awkward
+2. Call `render` (no arguments). It returns the image and any warnings. On a thumbnail it returns
+   three things in this order: your design, a feed mock-up image (your design among other
+   thumbnails, at the sizes it will be seen) and a `{version, warnings, checks}` block. If it
+   reports errors, fix them and render again.
+3. Look at the render (for a thumbnail, the feed mock-up and the checks first; the thumbnail notes below say what
+   each means). Fix what is wrong: clipped or overlapping text, weak contrast, awkward
    crop, anything off-brand or cluttered. Then render again. If nothing is wrong, stop.
 4. At most 4 renders per turn (8 on a "Take it further" turn). Do not render just to confirm a file you did not change.
 

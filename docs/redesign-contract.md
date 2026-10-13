@@ -21,11 +21,14 @@ Imago/
 │   ├── validate.mjs    design.html rules
 │   ├── cutout.mjs      background removal (@imgly/background-removal-node)
 │   ├── render-mcp.mjs  stdio MCP server handed to claude: tools `render` and `cut_out`
+│   ├── checks.mjs      the render checks (pure functions over measurements)
+│   ├── feed.mjs        stages the feed mock-up (neighbours, temp folder); feed-markup.mjs + feed.css draw it
 │   ├── series.mjs      series.json (series metadata)
 │   ├── library.mjs     list query (filter, sort, page) and the style-reference copy
 │   ├── zip.mjs         a store-only zip writer for the library's Export
-│   └── presets/        design-rules.md, thumbnail.md, photo.md, graphic.md, series.md, reference/
-├── render/render.cjs   headless Electron: design.html -> png|jpg|webp
+│   └── presets/        design-rules.md, thumbnail.md, photo.md, graphic.md, series.md, further.md, planner.md, concept.md, craft/<preset>/
+├── render/render.cjs   headless Electron: design.html -> png|jpg|webp, plus measurements and the feed capture
+│   (dom-measure.cjs runs inside the page; measure.cjs is the pixel maths)
 ├── fonts/              content fonts for designs (TTF) + fonts.css + fonts.json
 ├── web/                Vite + React + TS UI -> web/dist
 └── tests/              node --test; never spends subscription usage
@@ -59,8 +62,10 @@ project.json
 design.html             current design; what the preview shows
 assets/                 uploads, cutouts (safe leaf names only)
 reference/              style-reference.html: the series reference design (see Library); never served
+reference/craft/        the preset's craft files, copied in by the server on every turn (see Thumbnail craft); never served
 versions/v<n>.html      snapshot taken at each render
 renders/v<n>.png        the render of that snapshot, at scale 1
+renders/v<n>-feed.png   thumbnails only: that render in a feed mock-up (see "Feed mock-up and checks")
 exports/                files made by Export
 ```
 
@@ -79,7 +84,7 @@ exports/                files made by Export
   "brief": { "free-form fields from the start form": "" },
   "assets": [{ "name": "face.png", "kind": "upload|cutout|stock", "width": 0, "height": 0, "from": null }],
   "messages": [{ "role": "user|assistant", "text": "", "at": "ISO", "version": null, "mode": "standard|further", "model": "claude-..." }],
-  "versions": [{ "n": 1, "at": "ISO", "warnings": [] }],
+  "versions": [{ "n": 1, "at": "ISO", "warnings": [], "checks": [{ "id": "text.words", "level": "ok", "value": 3, "message": "3 words." }] }],
   "current": 1,
   "running": false,
   "series": null,
@@ -103,7 +108,7 @@ and `assets/`.
 
 | id | Default size | Brief fields |
 | --- | --- | --- |
-| `thumbnail` | by `brief.format`: `video` 16:9 1280×720 (default), `shorts` 9:16 720×1280, `podcast` 1:1 1280×1280 | `title` (the video's title or topic), `channelColours?`, `notes?`, `format?` |
+| `thumbnail` | by `brief.format`: `video` 16:9 1280×720 (default), `shorts` 9:16 720×1280, `podcast` 1:1 1280×1280 | `title` (the video's title or topic), `channelColours?`, `notes?`, `format?`; the brief may also carry `platforms?` (see Thumbnail craft) |
 | `photo` | the first uploaded photo's own size, or an aspect chosen from `original, 1:1, 4:5, 3:4, 2:3, 9:16, 4:3, 3:2, 16:9, 21:9` (long edge kept at most 2160) | `instruction` |
 | `graphic` | chosen from the grouped catalogue below, or custom (64–4096 each side) | `description` |
 
@@ -138,6 +143,59 @@ desktop display size; its link image is 1200×630.
 renderer: 3840×3840, 5400×7200 (2700×3600 at 2×) and 8192×8192 render correctly; 12288×12288
 (4096 at 3×) loses content ("tile memory limits exceeded"). So the UI hides scales over the limit
 and the server answers 400 `BAD_SCALE`.
+
+## Thumbnail craft, concept prompts and fonts
+
+The thumbnail preset's detail lives in files, not in the system prompt. `presets/thumbnail.md` is the
+lean core (rules, and which craft file to Read); the method is in `server/presets/craft/thumbnail/`.
+
+**Craft files.** `index.md` (what to read when), `honesty-and-title.md`, `face-finishing.md`,
+`vertical.md` (Shorts, Reels, TikTok: 3:4 centre crop, overlay zones, sources with access dates),
+`square.md` (podcast 1:1), `judging.md` (the feed mock-up and what to do about each check id),
+`kit.md` (using the "From the video" material), and `archetypes/<id>.md` for the eight archetype ids
+`reaction`, `result-reveal`, `before-after`, `versus`, `number`, `curiosity-gap`, `object-hero`,
+`story-moment` (`THUMBNAIL_ARCHETYPES`). Each archetype file has Fits when, Layout (16:9, 9:16, 1:1), Text
+and Fails when.
+
+**Delivery.** Claude's tools reach only the project folder and may write only `design.html`, so the
+files are copied into `<project>/reference/craft/<preset>/` by `installCraft(project, projectDir)`
+(`presets/index.mjs`), which `runTurnInner` calls once per `claude -p` attempt, before the system
+prompt is written. It replaces the previous copy (the rest of `reference/`, including
+`style-reference.html`, is left alone), does nothing for a preset without a `craft/<preset>` folder, and
+a failure to copy never fails the turn. The files are read-only to Claude, never served over HTTP, and
+a changed prompt therefore reaches existing projects on their next turn. A concept or planner turn
+gets them through the same call.
+
+**Platforms.** `brief.platforms` is an array of `youtube-shorts`, `instagram-reels`, `tiktok` (`PLATFORMS`,
+`briefPlatforms()` ignores unknown ids and repeats). With `brief.format === "shorts"` and at least one
+platform, `buildSystemPrompt` adds a `Platforms:` line under "This project": the key zone
+(x 48-590, y 190-960 on the 720x1280 canvas), and each platform's overlay needs. The field is
+optional and the system prompt is unchanged without it. The form field itself belongs to the UI.
+
+**Concept prompts** (run by the concept-set code, not by `runTurn`):
+
+- `planner.md`, placeholders `{{count}}` (concepts wanted) and `{{format}}`: the planner's system
+  prompt, built with `plannerSection({count, format})`. It does not use `design-rules.md` or
+  `thumbnail.md`. A planning turn needs Read and Glob, `Write(./concepts.json)` and no `render` or
+  `cut_out`, and may Read the kit's files in `assets/` (named in its first message, with the contact
+  sheet when there is one) and `reference/craft/`. It writes `{"concepts": [...]}` in the shape of the
+  plan (`archetype`, `label`, `idea`, `text`, `frame?`, `pictures?`, `why`). The wiring validates the file
+  (distinct archetypes in `THUMBNAIL_ARCHETYPES`, `text` of at most 4 words, `frame` and `pictures` paths
+  that exist) and falls back when it fails; the prompt asks for exactly that.
+- `concept.md`, placeholders `{{concept}}` and `{{siblings}}`: a section appended to a design turn's
+  system prompt (after `thumbnail.md`, series and further sections), built with
+  `conceptSection(concept, siblings)`. `describeConcept()` renders a concept as plain lines and the siblings as
+  `Concept 1`, `Concept 2`, ... blocks, `(none)` when there are none. Both builders replace only the
+  placeholders named above.
+
+**Fonts.** `fonts/fonts.json` and `fonts/fonts.css` list the content fonts; any family there is accepted by the
+validator and offered to Claude ("Content fonts" in the system prompt). Added for thumbnails, all vendored as TTF from
+the google/fonts repository with their licences in `fonts/licenses/`: Archivo (variable, weight 100-900 and
+width 62-125, Fabula's display face), Montserrat (variable, heavy geometric), League Gothic (variable
+width, condensed), Lilita One (rounded), Bangers (comic), Bowlby One (fat soft poster), Permanent
+Marker (hand marker, Apache-2.0; the others are SIL OFL 1.1). A face with a width axis carries a
+`stretch` range in `fonts.json` and a `font-stretch` range in `fonts.css`. Only OFL or Apache-2.0
+faces may be added.
 
 ## Design rules (validate.mjs, also told to Claude)
 
@@ -205,7 +263,10 @@ claude -p --output-format stream-json --verbose
 
 - `render({})`: validates `design.html`. If it passes, it snapshots the file to `versions/v<n>.html`
   and renders it to `renders/v<n>.png` at scale 1. It returns
-  `[{type:"image", data, mimeType:"image/png"}, {type:"text", text: JSON {version, warnings}}]`.
+  `[{type:"image", ...the design}, {type:"image", ...the feed mock-up}, {type:"text", text: JSON {version, warnings, checks}}]`
+  for a thumbnail (a photo or graphic gets only the design image and `{version, warnings}`). The
+  mock-up is also saved as `renders/v<n>-feed.png`. The mock-up and the checks never fail a render:
+  if either breaks, the design image and `{version, warnings}` still come back.
   On validation errors it returns `isError: true` with the list.
 - `cut_out({asset})`: removes the background of `assets/<asset>` and writes
   `assets/<stem>-cutout.png` (never overwriting: `-2`, `-3` ... when the name is taken, so `face.jpg`
@@ -213,8 +274,13 @@ claude -p --output-format stream-json --verbose
   from that result. Images over 100 megapixels are refused.
 
 The server learns about a render from the `tool_result` that follows an `mcp__imago__render`
-`tool_use` in the stream. It reads the highest `renders/v<n>.png`, records the version in
-`project.json`, sets `current` and emits `render.done`.
+`tool_use` in the stream. It reads the highest `renders/v<n>.png`, records the version (with its
+`checks`) in `project.json`, sets `current` and emits `render.done`.
+
+The MCP process gets extra environment from `mcpConfig` for the feed: `IMAGO_DATA_DIR` (where the
+neighbours are), `IMAGO_PROJECT_ID`, `IMAGO_PRESET` (only `thumbnail` is judged), `IMAGO_FORMAT`
+(`video`, `shorts` or `podcast`: the brief's `format`, else the canvas shape), `IMAGO_BRIEF_TITLE` and
+`IMAGO_CONCEPT_SET` (the project's `conceptSet.id`, empty when it has none).
 
 ## HTTP API
 
@@ -301,7 +367,7 @@ Each message is `event: <name>` plus `data: <json>`. A new subscriber first gets
 | `assistant.text` | `{text}` (a complete text block from the assistant) |
 | `tool.use` | `{name, summary}` (for example "Writing design.html" or "Rendering") |
 | `tool.done` | `{name, ok}`: the `tool_result` for an earlier `tool.use` arrived (matched by tool-use id; `ok` is false for an error). The UI refreshes the live draft after a `Write` or `Edit` is done |
-| `render.done` | `{version, url, warnings}` |
+| `render.done` | `{version, url, warnings, checks, feedUrl}`: `checks` is `[]` and `feedUrl` null for a photo or graphic, or when the mock-up failed |
 | `run.finished` | `{ok: true, costUsd, durationMs}`. `costUsd` is Claude Code's `total_cost_usd`: an API-price estimate, not a charge on a subscription. The UI labels it that way |
 | `run.error` | `{code, message}` (`CLAUDE_MISSING`, `CLAUDE_SIGNED_OUT`, `TIMEOUT`, `CANCELLED`, `EXITED`) |
 | `project` | `{project}` (after any change to project.json) |
@@ -323,8 +389,110 @@ Move to series, Delete with a six-second Undo), multi-select (checkboxes, shift-
 all shown) and a bulk bar (Delete, Star, Move to series, Export as a zip). The thumbnail start form
 has an optional Series picker (none, existing, new).
 
+Thumbnail projects have a Design / In the feed switch above the preview. The Feed view
+(`screens/FeedView.tsx`) wraps the exported `FeedPreview` (`web/src/feed/FeedPreview.tsx`; props
+`{src, format, title, channel?, neighbours, theme, surface}`, scaled to fit its container) with a
+switch for the surfaces of the format, dark and light (the full-screen players are always dark), a
+note on whether the neighbours are the owner's own designs, and the current version's checks as a
+plain list. `?mock=1` shows it with canned checks and stand-in neighbours.
+
 Every asset is copied into `web/public/brand/`; nothing is fetched from a CDN. The content fonts in
 `fonts/` are for designs, never for the chrome.
+
+## Feed mock-up and checks
+
+Every thumbnail render is judged in context (the plan is `Instrumenta/docs/suite/thumbnail-uplift.md`,
+"Feed mock-up and checks"). It costs about 0.7 s per render, measured on this machine: a 1280×720
+render through the MCP took 0.58 s before and 1.25 s after (decoys or eight real neighbours alike);
+the budget was 1.5 s.
+
+### How it is made
+
+`render.cjs` renders the design, then (`--measure`) walks the page for text boxes and computed styles
+(`dom-measure.cjs`), captures it a second time with every glyph made invisible to read what each text
+block sits on, and takes pixel statistics of a 320 px-wide copy. With `--feed=<job.json>` it then
+opens the staged feed page in a second window of the same process, under the same rules (the page
+folder is the only readable one, no network, CSP without `script-src`) and saves the capture. The MCP
+stages a temp folder (`imago-feed-*` in `os.tmpdir()`: the page, `thumb.png`, copies of the
+neighbours, all brief strings HTML-escaped) and removes it afterwards. The mock-up is 1568 px wide
+(so a vision model does not downscale it), dark and light side by side, with this design outlined in
+teal. `server/feed-markup.mjs` and `server/feed.css` draw it and are also what the UI's `FeedPreview`
+injects, so the two cannot drift.
+
+**Neighbours.** The owner's other thumbnail projects of the same shape (16:9, 9:16 or 1:1 by the
+brief's format or the canvas), newest `updatedAt` first, at most eight, each its current render.
+Excluded: this project, every project whose `conceptSet.id` equals this one's (a field piece D adds;
+absent today, so nothing is excluded by it yet), projects without a render on disk. Fewer than six are
+padded with neutral stand-ins (gradient and disc SVGs). `feed.distinct` compares against the real ones
+when there are any, else against the stand-ins, and its message says which.
+
+### Surfaces, sizes and where they came from (accessed 2026-10-13)
+
+YouTube publishes no display sizes, and the third-party guides disagree, so these are the values
+chosen and the evidence behind them. Real-size drawing, in CSS px:
+
+| Format | Surface | Drawn as |
+| --- | --- | --- |
+| 16:9 | Home grid, desktop | two cards 356 wide, 12 px radius, avatar, title (2 lines max), channel, views, duration badge |
+| 16:9 | Search results, desktop | 360 × 202 thumbnail beside title, views, channel, snippet |
+| 16:9 | Watch page sidebar | 168 × 94 thumbnail, 8 px radius, title beside it |
+| 16:9 | Mobile home | 360 wide, full width, no radius |
+| 9:16 | Shorts shelf | tiles 168 × 298 |
+| 9:16 | Shorts, Reels, TikTok full screen | 390 × 780 phone, cover-fit, with top bar, right action rail, bottom caption block and a 52 px nav bar |
+| 9:16 | Instagram and TikTok profile grids | three columns, tiles about 120 × 160 (3:4, centre crop), TikTok view count bottom-left |
+| 1:1 | Podcast shelf | square cards 168 |
+| 1:1 | Mobile podcast list | 96 px square |
+| 1:1 | Square in a 16:9 slot | pillarboxed in black |
+
+- YouTube Help, "Add video thumbnails" (support.google.com/youtube/answer/72431, fetched): 3840×2160 for
+  videos (16:9), 2160×3840 for Shorts (9:16), upload limits 2 MB on mobile and 50 MB on desktop;
+  podcast playlists take a thumbnail "with an aspect ratio of 1:1 instead of 16:9" (10 MB mobile).
+  That is the only official source found, and it gives no on-screen sizes.
+- Sidebar about 168 × 94 px: touhfa.art (youtube-thumbnail-size-guide) and creaticalc.com (youtube
+  thumbnail mobile readability). Search results: 246 × 138, 360 × 202 or 240 to 360 wide by different
+  guides; 360 chosen. Home grid: 320 × 180 up to 480 × 270 depending on the window; 356 chosen so two
+  fit the 760 px panel. Mobile: 116 to 168 wide in one guide, about 350 CSS px in another; a full-width
+  360 phone chosen. The duration badge sits bottom-right on all of them (every guide says to keep that
+  corner clear). The title, channel and badge typography (16/22 medium, 12/18 grey, badge 12 px on
+  `rgba(0,0,0,.8)` with a 4 px inset) is from the live interface as remembered, not from a source.
+- 3:4 profile-grid crop: hopperhq.com ("Instagram Reel Size in 2026", "Instagram's vertical grid"):
+  a 1080×1920 cover loses 240 px top and bottom, leaving 1080×1440 (y 240 to 1680). The task brief
+  and the plan give the same crop for the TikTok grid. Used as 12.5% off the top and bottom.
+- Overlay zones (no platform publishes them; the sources disagree by up to 2×): houseofmarketers.com
+  (TikTok: 131 px top, 367 px bottom, 120 px sides on 1080×1920), poster.ly safe-zone checker
+  (TikTok: 250 px bottom, 100 px right, 100 px top; Shorts: 180 px bottom, 80 px right, 100 px top),
+  clipspeed.ai (Shorts: about 15% top and bottom, 140 px right), remotion.dev social-safe-zones
+  (Instagram: action rail x 900 to 1025, captions from y 1700), abyssale and timetopost checkers
+  (Reels: 250 to 340 px top and bottom, 120 px rail from mid-height). Chosen, as fractions of the
+  canvas, and drawn that way: action rail right 15% from 42% to 80% down; caption block bottom 22%
+  (left 80% of the width); top bar top 8%.
+- 1:1: the only official fact is that podcast playlists want 1:1. Where a square thumbnail is used as
+  an ordinary episode thumbnail, one third-party guide (touhfa.art, podcast thumbnail design guide)
+  says YouTube pillarboxes it in a 16:9 frame with black bars. Unverified and shown as such in the
+  label. Mobile podcast list sizes are a judgement.
+
+### Checks
+
+`{id, level: "ok"|"warn"|"info", value, message}`, in this order, never blocking. `layout.badge`
+appears for 16:9 only and `layout.safe` for 9:16 only. Thresholds live in `LIMITS` in
+`server/checks.mjs`. "Visible" text means rendered text nodes that are not `display: none`,
+`visibility: hidden`, near-transparent or mostly off the canvas.
+
+| id | Rule |
+| --- | --- |
+| `text.words` | Visible words; warn above 5 (16:9, 1:1) or 4 (9:16) |
+| `text.repeatsTitle` | Share of the visible words (filler words ignored) that are also in the brief's title; warn at 0.6 or more with at least two content words |
+| `text.smallest` | Smallest cap height (measured with the real font, "H") times the smallest surface's width over the canvas width: 168 px (16:9 sidebar), 120 (9:16 grid tile), 96 (1:1 list). Warn under 7 px, which is about a 10 px sans, the least that reads on a phone; the message says what font size would pass |
+| `text.contrast` | WCAG ratio of the weakest block's colour (alpha applied) against the median luminance of what is behind it. Warn under 3:1 (thumbnail text is large text); 2:1 for text with a stroke or shadow. Gradient-filled text is skipped |
+| `layout.badge` | Warn when text overlaps the bottom-right 15% × 13% by 10% of its area, or a cut-out covers 30% of that zone |
+| `layout.safe` | Warn for text outside 12.5% to 87.5% of the height, in the rail zone, or in the caption zone; or a cut-out whose top is above the crop |
+| `subject.size` | Tallest `<img>` whose `src` contains `cutout` (the name `cut_out` writes), as a share of the canvas height. Warn under 0.5 (16:9, 1:1) or 0.4 (9:16). Faces are not detected: a face is a subject only if it was cut out |
+| `image.contrast` | Info: p95 minus p5 of luma at 320 px; the band to aim for is 0.55 to 0.95 |
+| `image.colourfulness` | Info: Hasler and Susstrunk M at 320 px; under 15 muted, 33 or more vivid |
+| `feed.distinct` | Info: mean CIE76 colour difference between this render's mean colour and each neighbour's; under 18 reads as blending in |
+
+Known limits: `text.smallest` ignores CSS transforms; contrast is against a median, so text on a very
+busy picture can read better or worse than the number; transparent areas are measured over white.
 
 ## Fake claude (tests)
 

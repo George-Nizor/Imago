@@ -125,3 +125,13 @@ export function makePng(width, height, [r, g, b] = [200, 60, 60]) {
   const raw = Buffer.concat(Array.from({ length: height }, () => row));
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
 }
+
+/** A project folder with a render, as the store would leave it. */
+export function seedProject(projectsDir, id, extra = {}) {
+  const dir = path.join(projectsDir, id);
+  fs.mkdirSync(path.join(dir, "renders"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "renders", "v2.png"), makePng(64, 36, [10, 120, 200]));
+  const project = { id, title: id, preset: "thumbnail", size: { width: 1280, height: 720 }, brief: { title: `Title of ${id}` }, current: 2, updatedAt: "2026-01-01T00:00:00Z", ...extra };
+  fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify(project));
+  return dir;
+}

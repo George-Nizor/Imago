@@ -12,6 +12,22 @@
       "note": "Tall condensed poster face; thumbnail headlines."
     },
     {
+      "family": "Archivo",
+      "file": "Archivo.ttf",
+      "weights": [
+        100,
+        900
+      ],
+      "variable": true,
+      "role": "display",
+      "category": "sans",
+      "note": "Fabula's display face, so a film and its thumbnail can match. Weight 100-900 and width 62-125 (font-stretch).",
+      "stretch": [
+        62,
+        125
+      ]
+    },
+    {
       "family": "Archivo Black",
       "file": "ArchivoBlack.ttf",
       "weights": [
@@ -23,6 +39,17 @@
       "note": "Wide heavy grotesque; punchy labels."
     },
     {
+      "family": "Bangers",
+      "file": "Bangers.ttf",
+      "weights": [
+        400
+      ],
+      "variable": false,
+      "role": "display",
+      "category": "comic",
+      "note": "Comic-book caps with a slant; loud, playful, gaming and reaction."
+    },
+    {
       "family": "Bebas Neue",
       "file": "BebasNeue.ttf",
       "weights": [
@@ -32,6 +59,17 @@
       "role": "display",
       "category": "sans",
       "note": "All-caps condensed; titles and tags."
+    },
+    {
+      "family": "Bowlby One",
+      "file": "BowlbyOne.ttf",
+      "weights": [
+        400
+      ],
+      "variable": false,
+      "role": "display",
+      "category": "sans",
+      "note": "Fat, soft-cornered poster face; huge friendly words."
     },
     {
       "family": "Cinzel",
@@ -69,6 +107,44 @@
       "note": "Neutral interface sans, nine weights."
     },
     {
+      "family": "League Gothic",
+      "file": "LeagueGothic.ttf",
+      "weights": [
+        400
+      ],
+      "variable": true,
+      "role": "display",
+      "category": "sans",
+      "note": "Tall narrow gothic with a width axis (75-100); fits long words big.",
+      "stretch": [
+        75,
+        100
+      ]
+    },
+    {
+      "family": "Lilita One",
+      "file": "LilitaOne.ttf",
+      "weights": [
+        400
+      ],
+      "variable": false,
+      "role": "display",
+      "category": "rounded",
+      "note": "Rounded, chunky and warm; kids, food, lifestyle."
+    },
+    {
+      "family": "Montserrat",
+      "file": "Montserrat.ttf",
+      "weights": [
+        100,
+        900
+      ],
+      "variable": true,
+      "role": "display",
+      "category": "sans",
+      "note": "Heavy geometric sans, nine weights; clean modern punch at 800-900."
+    },
+    {
       "family": "Oswald",
       "file": "Oswald.ttf",
       "weights": [
@@ -79,6 +155,17 @@
       "role": "display",
       "category": "sans",
       "note": "Condensed gothic, six weights."
+    },
+    {
+      "family": "Permanent Marker",
+      "file": "PermanentMarker.ttf",
+      "weights": [
+        400
+      ],
+      "variable": false,
+      "role": "display",
+      "category": "hand",
+      "note": "Felt-marker handwriting; for a scribbled aside or circled word, not for the main headline."
     },
     {
       "family": "Playfair Display",

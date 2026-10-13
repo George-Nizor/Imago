@@ -7,9 +7,10 @@ import { fileURLToPath } from "node:url";
 import { SpawnError, runProcess } from "./process.mjs";
 import { registerCutout, syncAssets } from "./assets.mjs";
 import { fontFamilies, highestVersion } from "./design-files.mjs";
-import { buildFirstPrompt, buildSystemPrompt } from "./presets/index.mjs";
+import { buildFirstPrompt, buildSystemPrompt, installCraft } from "./presets/index.mjs";
 import { SIGNED_OUT, interpretLine, summarizeTool } from "./stream-json.mjs";
 import { electronEnv } from "./renderer.mjs";
+import { formatOf } from "./feed.mjs";
 
 // Built-in tools a turn can use (`--tools`; MCP tools are not built in, so they live in --allowedTools only).
 const STANDARD_TOOLS = "Read,Write,Edit,Glob";
@@ -48,6 +49,13 @@ export function mcpConfig(config, project, projectDir) {
     IMAGO_HEIGHT: String(project.size.height),
     IMAGO_ELECTRON_BIN: config.electronBin,
     IMAGO_CHROMIUM_LIBS: config.chromiumLibs,
+    // What the render tool needs to judge a thumbnail in context: where the neighbours are and what it is called.
+    IMAGO_DATA_DIR: config.dataDir,
+    IMAGO_PROJECT_ID: project.id,
+    IMAGO_PRESET: project.preset,
+    IMAGO_FORMAT: formatOf(project),
+    IMAGO_BRIEF_TITLE: String(project.brief?.title ?? project.title ?? "").slice(0, 300),
+    IMAGO_CONCEPT_SET: typeof project.conceptSet?.id === "string" ? project.conceptSet.id : "",
   };
   // The MCP process is spawned by Claude with a trimmed environment; it needs the display hints.
   for (const key of ["DISPLAY", "WAYLAND_DISPLAY", "LD_LIBRARY_PATH", "HOME"]) if (process.env[key]) env[key] = process.env[key];
@@ -196,17 +204,21 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
           const n = await highestVersion(projectDir);
           if (n >= 1) {
             let warnings = [];
+            let checks = [];
             try {
-              warnings = JSON.parse(ev.text).warnings ?? [];
+              const reply = JSON.parse(ev.text);
+              warnings = reply.warnings ?? [];
+              checks = Array.isArray(reply.checks) ? reply.checks : [];
             } catch {
               // The version still counts without its warnings.
             }
             lastVersion = n;
             project = await store.mutate(id, (p) => {
-              if (!p.versions.some((v) => v.n === n)) p.versions.push({ n, at: new Date().toISOString(), warnings });
+              if (!p.versions.some((v) => v.n === n)) p.versions.push({ n, at: new Date().toISOString(), warnings, ...(checks.length ? { checks } : {}) });
               p.current = n;
             });
-            emit("render.done", { version: n, url: `/projects/${id}/renders/v${n}.png`, warnings });
+            const feed = await access(path.join(projectDir, "renders", `v${n}-feed.png`)).then(() => `/projects/${id}/renders/v${n}-feed.png`, () => null);
+            emit("render.done", { version: n, url: `/projects/${id}/renders/v${n}.png`, warnings, checks, feedUrl: feed });
             emit("project", { project });
           }
         } else if (assetCalls.has(ev.toolUseId)) {
@@ -243,6 +255,7 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
       for (const ev of interpretLine(line)) chain = chain.then(() => handle(ev)).catch(() => {});
     };
 
+    await installCraft(project, projectDir).catch(() => {}); // best effort: a turn without the craft files still works
     // The system prompt goes in a file outside the project (so it is not on the command line, and
     // Claude cannot read it back through its file tools); it is removed as soon as the turn ends.
     const promptDir = await mkdtemp(path.join(os.tmpdir(), "imago-prompt-"));

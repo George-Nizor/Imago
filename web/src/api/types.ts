@@ -34,6 +34,20 @@ export interface Message {
   mode?: TurnMode;
   model?: string;
 }
+/** One measured judgement of a render; never blocks. Ids and meaning: docs/redesign-contract.md. */
+export interface Check {
+  id: string;
+  level: "ok" | "warn" | "info";
+  value: number | boolean | null;
+  message: string;
+}
+export interface ProjectVersion {
+  n: number;
+  at: string;
+  warnings: string[];
+  /** Thumbnails only. */
+  checks?: Check[];
+}
 export interface Project {
   schemaVersion: number;
   id: string;
@@ -46,7 +60,7 @@ export interface Project {
   brief: Record<string, string>;
   assets: AssetInfo[];
   messages: Message[];
-  versions: { n: number; at: string; warnings: string[] }[];
+  versions: ProjectVersion[];
   current: number | null;
   running: boolean;
   /** Library fields; absent on projects made before the library existed. */
@@ -151,7 +165,7 @@ export type ServerEvent =
   | { type: "assistant.text"; text: string }
   | { type: "tool.use"; name: string; summary: string }
   | { type: "tool.done"; name: string; ok: boolean }
-  | { type: "render.done"; version: number; url: string; warnings: string[] }
+  | { type: "render.done"; version: number; url: string; warnings: string[]; checks?: Check[]; feedUrl?: string | null }
   | { type: "run.finished"; ok: boolean; costUsd: number; durationMs: number }
   | { type: "run.error"; code: string; message: string };
 
@@ -205,6 +219,8 @@ export interface Api {
   subscribe(id: string, onEvent: (e: ServerEvent) => void): () => void;
   /** URL of the PNG render of a version. */
   renderUrl(id: string, version: number): string;
+  /** URL of the feed mock-up PNG of a version (thumbnails only; 404 when there is none). */
+  feedUrl(id: string, version: number): string;
   /** URL of the live design.html, for the sandboxed preview. `nonce` busts the cache. */
   designUrl(id: string, nonce: number): string;
   /** URL of an uploaded asset, for thumbnails. */

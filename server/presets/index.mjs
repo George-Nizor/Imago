@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { cp, mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,6 +40,18 @@ export const THUMBNAIL_NOTES = {
   shorts: "Format: Shorts thumbnail, 9:16 vertical (720×1280 canvas, exported at 3× as 2160×3840).",
   podcast: "Format: podcast thumbnail, 1:1 square (1280×1280 canvas, exported at 3× as 3840×3840).",
 };
+export const THUMBNAIL_ARCHETYPES = ["reaction", "result-reveal", "before-after", "versus", "number", "curiosity-gap", "object-hero", "story-moment"];
+
+/** Vertical-cover platforms a brief may list (`brief.platforms`), with what each needs from the design. */
+export const PLATFORMS = {
+  "youtube-shorts": { label: "YouTube Shorts", needs: "keep the face and text out of the right action rail and the bottom caption block" },
+  "instagram-reels": { label: "Instagram Reels", needs: "the profile grid shows only the centre 3:4 crop, and the full screen has a bottom caption block and a right action rail" },
+  tiktok: { label: "TikTok", needs: "the profile grid shows only the centre 3:4 crop with the view count over its bottom-left, and the full screen has a bottom caption block and a right action rail" },
+};
+/** The valid platform ids in a brief's `platforms`, in order, without repeats. */
+export const briefPlatforms = (brief) =>
+  Array.isArray(brief?.platforms) ? [...new Set(brief.platforms.filter((p) => typeof p === "string" && Object.hasOwn(PLATFORMS, p)))] : [];
+
 export const thumbnailFormat = (id) => THUMBNAIL_FORMATS.find((f) => f.id === id);
 
 // Current official or recommended pixel sizes. Print sizes are at 150 dpi. Facebook's cover is its
@@ -133,6 +146,18 @@ export function photoSize(source, aspect = "original") {
   return { width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) };
 }
 
+/**
+ * The platform line of "This project" for a vertical cover, or "" when no platform is listed.
+ * One design serves every listed platform, so the line names the shared key zone.
+ */
+export function platformNote(project) {
+  const platforms = briefPlatforms(project.brief);
+  if (project.preset !== "thumbnail" || project.brief?.format !== "shorts" || !platforms.length) return "";
+  const names = platforms.map((p) => PLATFORMS[p].label).join(", ");
+  const needs = platforms.map((p) => `${PLATFORMS[p].label}: ${PLATFORMS[p].needs}`).join("; ");
+  return `Platforms: ${names}. One design must work on ${platforms.length > 1 ? "all of them" : "it"}. Keep the face, the eyes and all text inside x 48-590, y 190-960 of the 720x1280 canvas (inside the 3:4 centre crop, clear of the top bar, the right rail and the caption block); ${needs}. Read reference/craft/thumbnail/vertical.md.`;
+}
+
 let rules;
 const presetText = new Map();
 
@@ -146,7 +171,7 @@ export function buildSystemPrompt(project, fontFamilies = []) {
   return [
     rules,
     presetText.get(project.preset),
-    `## This project\n\nCanvas: ${project.size.width}×${project.size.height} CSS pixels. Body must be exactly that size.${project.preset === "thumbnail" ? `\n${THUMBNAIL_NOTES[project.brief?.format] ?? THUMBNAIL_NOTES.video}` : ""}\nContent fonts: ${fontFamilies.join(", ")}.\n\n## Assets\n\n${assets}`,
+    `## This project\n\nCanvas: ${project.size.width}×${project.size.height} CSS pixels. Body must be exactly that size.${project.preset === "thumbnail" ? `\n${THUMBNAIL_NOTES[project.brief?.format] ?? THUMBNAIL_NOTES.video}` : ""}${platformNote(project) ? `\n${platformNote(project)}` : ""}\nContent fonts: ${fontFamilies.join(", ")}.\n\n## Assets\n\n${assets}`,
   ].join("\n\n");
 }
 
@@ -162,4 +187,48 @@ export function buildFirstPrompt(project, userText) {
   if (project.preset === "photo" && project.brief?.aspect && project.brief.aspect !== "original") lines.push(`Aspect ratio: ${project.brief.aspect}`);
   const brief = lines.length ? `Brief:\n${lines.join("\n")}\n\n` : "";
   return `${brief}${userText}`.trim();
+}
+
+const craftRoot = path.join(here, "craft");
+
+/**
+ * Copies this preset's craft files into the project's `reference/craft/` (read-only for Claude, never
+ * served), replacing the last copy so a changed prompt reaches old projects. Presets without craft do nothing.
+ */
+export async function installCraft(project, projectDir) {
+  const from = path.join(craftRoot, project.preset);
+  if (!(await stat(from).then((s) => s.isDirectory(), () => false))) return false;
+  const to = path.join(projectDir, "reference", "craft");
+  await rm(to, { recursive: true, force: true });
+  await mkdir(to, { recursive: true });
+  await cp(from, path.join(to, project.preset), { recursive: true });
+  return true;
+}
+
+const fill = (template, values) => template.replace(/\{\{(\w+)\}\}/g, (m, k) => (k in values ? String(values[k]) : m));
+const FORMAT_WORDS = { video: "video thumbnail, 16:9 (1280x720)", shorts: "vertical cover, 9:16 (720x1280)", podcast: "podcast thumbnail, 1:1 (1280x1280)" };
+
+/** A concept as plain lines, for the `{{concept}}` and `{{siblings}}` placeholders. */
+export function describeConcept(c) {
+  const lines = [`- Archetype: ${c.archetype}`, `- Label: ${c.label}`, `- Idea: ${c.idea}`, `- Text on the image: ${c.text ? `"${c.text}"` : "(none)"}`];
+  if (c.frame) lines.push(`- Main picture: ${c.frame}`);
+  if (c.pictures?.length) lines.push(`- Other pictures: ${c.pictures.join(", ")}`);
+  if (c.why) lines.push(`- Why: ${c.why}`);
+  return lines.join("\n");
+}
+
+let plannerPrompt;
+let conceptPrompt;
+
+/** The planning turn's system prompt: planner.md with {{count}} and {{format}} filled in. */
+export function plannerSection({ count = 3, format = "video" } = {}) {
+  plannerPrompt ??= text("planner.md");
+  return fill(plannerPrompt, { count, format: FORMAT_WORDS[format] ?? FORMAT_WORDS.video });
+}
+
+/** The section appended to one concept's design turn: its own concept and the others in the set. */
+export function conceptSection(concept, siblings = []) {
+  conceptPrompt ??= text("concept.md");
+  const others = siblings.length ? siblings.map((c, i) => `Concept ${i + 1}\n${describeConcept(c)}`).join("\n\n") : "(none)";
+  return fill(conceptPrompt, { concept: describeConcept(concept), siblings: others });
 }

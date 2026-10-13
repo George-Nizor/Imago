@@ -6,8 +6,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadConfig, packageVersion } from "./config.mjs";
+import { computeChecks } from "./checks.mjs";
 import { cutOut } from "./cutout.mjs";
 import { highestVersion, validateDesignFile } from "./design-files.mjs";
+import { stageFeed } from "./feed.mjs";
 import { renderHtml } from "./renderer.mjs";
 import { fetchStockImage, searchImages } from "./stock.mjs";
 
@@ -31,10 +33,28 @@ server.registerTool(
       const snapshot = path.join(projectDir, "versions", `v${version}.html`);
       const out = path.join(projectDir, "renders", `v${version}.png`);
       await fs.copyFile(path.join(projectDir, "design.html"), snapshot);
-      // Rendered from design.html itself so relative assets/ paths resolve; the snapshot is identical.
-      await renderHtml(config, { htmlFile: path.join(projectDir, "design.html"), ...size, scale: 1, format: "png", out });
-      const data = (await fs.readFile(out)).toString("base64");
-      return { content: [{ type: "image", data, mimeType: "image/png" }, { type: "text", text: JSON.stringify({ version, warnings }) }] };
+      // Thumbnails are also judged in context: measured, then shown in a feed. Neither can fail the render.
+      const judged = process.env.IMAGO_PRESET === "thumbnail";
+      const feedOut = path.join(projectDir, "renders", `v${version}-feed.png`);
+      const staged = judged ? await stageFeed({ config, format: process.env.IMAGO_FORMAT || "video", title: process.env.IMAGO_BRIEF_TITLE ?? "", projectId: path.basename(projectDir), conceptSetId: process.env.IMAGO_CONCEPT_SET || null, outFile: feedOut }).catch(() => null) : null;
+      let result;
+      try {
+        // Rendered from design.html itself so relative assets/ paths resolve; the snapshot is identical.
+        result = await renderHtml(config, { htmlFile: path.join(projectDir, "design.html"), ...size, scale: 1, format: "png", out, measure: judged, feedJob: staged?.jobFile });
+      } finally {
+        await staged?.cleanup();
+      }
+      const content = [{ type: "image", data: (await fs.readFile(out)).toString("base64"), mimeType: "image/png" }];
+      if (result.feed) content.push({ type: "image", data: (await fs.readFile(feedOut)).toString("base64"), mimeType: "image/png" });
+      const reply = { version, warnings };
+      if (judged && result.measure) {
+        try {
+          reply.checks = computeChecks({ format: process.env.IMAGO_FORMAT || "video", title: process.env.IMAGO_BRIEF_TITLE ?? "", measure: result.measure, neighbours: { labs: (result.feed?.neighbours ?? []).map((n) => n.meanLab), source: staged?.source } });
+        } catch {
+          reply.checks = [];
+        }
+      }
+      return { content: [...content, { type: "text", text: JSON.stringify(reply) }] };
     } catch (error) {
       return text(`The render failed: ${error.message}`, true);
     }

@@ -1,35 +1,42 @@
 # Preset: YouTube thumbnail
 
-The project canvas is one of three formats, named in "This project": video 16:9 (1280x720),
-Shorts 9:16 (720x1280) or podcast 1:1 (1280x1280). Design at exactly that canvas; the owner
-exports it at 3x (3840x2160, 2160x3840, 3840x3840, YouTube's recommended sizes), so use
-high-resolution assets and crisp vectors, and no tiny details that only work at 1x.
-A Shorts thumbnail is vertical: stack subject and text top to bottom, keep the face and the text
-in the centred safe area (about 48 px from the sides, and clear of the top and bottom 15%
-where the Shorts UI sits). A podcast thumbnail is square: one centred subject, 1-3 words,
-nothing in the corners. The layout rules below (side by side, bottom-right badge) are for 16:9
-only; adapt them to the other two formats.
+The canvas is one of three formats, named in "This project": video 16:9 (1280x720), Shorts-style
+vertical covers 9:16 (720x1280) or podcast 1:1 (1280x1280). Design at exactly that canvas; the owner
+exports at 3x, so use high-resolution assets and crisp vectors, and nothing that only works at 1x.
 
-The goal is a click. It is judged at about 200 px wide on a busy feed, so everything must survive
-being tiny.
+The goal is a click that the video then keeps. It is judged at about 200 px wide (a 9:16 cover
+at about 120 px) in a busy feed, next to other thumbnails.
 
-- Three elements at most: one subject (a face or object), one short text block, one background.
-  Anything else must earn its place.
-- Text: 1-4 words, uppercase, a heavy condensed face (Anton, Bebas Neue, Archivo Black) at 120-220
-  px, tight line height. Give it a contrast move: a thick `-webkit-text-stroke` or layered
-  `text-shadow` in a dark colour, or a solid colour bar behind it. Never light text on a mid-tone
-  without one. If the brief gives a long title, distil it to the hook; do not repeat the title.
-- Hierarchy: one thing is clearly biggest (usually the subject or the key word), a second reads
-  next, the rest recedes. Give the eye a path, left to right or top to bottom.
-- Contrast and colour: a dark or saturated, simple background (gradient, vignette, a few
-  large shapes), one accent colour that pops, a bright rim or glow behind the subject. Use the
-  channel colours from the brief when given. Avoid grey, beige and busy detail.
-- Subject: if a photo is uploaded, `cut_out` it, enlarge it to fill 45-60% of the height, bleed it
-  off an edge, and add a 6-12 px light outline (several stacked `drop-shadow()` filters or a
-  white cut-out copy behind). Faces and eyes in the upper two thirds, looking toward the text.
-- Layout: subject on one side, text on the other, not both centred. Keep 48 px clear of every
-  edge and keep the bottom-right 280x120 px empty (the video duration badge sits there).
-- Emotion or curiosity beats information. Exaggerate: bigger, brighter, closer.
-- No small print, logos, paragraphs, borders or drop-shadow boxes. If it needs reading closely it
-  is wrong.
-- Offer one confident direction, not a compromise between several.
+## Craft files
+
+Detailed method is in `reference/craft/thumbnail/`. Read, with Read, before you write the HTML:
+
+1. `reference/craft/thumbnail/index.md`, then `honesty-and-title.md`.
+2. `archetypes/<id>.md` for your archetype: `reaction`, `result-reveal`, `before-after`, `versus`,
+   `number`, `curiosity-gap`, `object-hero` or `story-moment`. Use the one named in the message;
+   otherwise choose the best fit and say which. One idea only.
+3. The file for your format: `vertical.md` (9:16) or `square.md` (1:1). 16:9 is covered by the archetype.
+4. `face-finishing.md` when a person or cut-out is in the picture.
+5. `judging.md` for what the feed mock-up and checks mean. `kit.md` when the message has "From the
+   video".
+
+## Core rules
+
+- Three elements at most: one subject (a face or an object), one short text block, one background.
+- Text: 1-4 words (2-4 on a vertical cover), uppercase, a heavy display face, huge. Contrast move: a
+  thick stroke, a layered shadow, or a solid bar. The text must say what the title does not; never
+  restate the title. No text at all is fine when the picture is the hook.
+- Honesty: show only what the video delivers. Use the video's own frames and pictures and the
+  owner's uploads. Stock images may set mood but never contradict the claim. No invented numbers,
+  quotes, or fake interface.
+- One thing is clearly biggest (the face or the object), a second reads next, the rest recedes.
+  Subject on one side, text on the other, not both centred. Faces look toward the text. Crop tight
+  and bleed off an edge.
+- Dark or saturated, simple background, one accent that pops (the channel colours or the film's
+  palette). Avoid grey, beige, busy detail, small print, logos, paragraphs, borders.
+- 16:9: 48 px clear of the edges; keep the bottom-right corner (about 200x90 px) clear of text and subject
+  (the duration badge). 9:16: key content inside the centre 3:4 crop and clear of the right rail,
+  the bottom caption block and the top bar (see `vertical.md`). 1:1: nothing in the corners.
+- After each render look at the feed mock-up first, at its smallest tile, then at the checks.
+  Fix what they show, then render again.
+- Offer one confident direction, not a compromise.

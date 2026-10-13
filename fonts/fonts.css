@@ -1,8 +1,16 @@
-/* Content fonts for designs (all SIL OFL). Generated from fonts.json order; variable faces carry a weight range. */
+/* Content fonts for designs (SIL OFL 1.1; Permanent Marker is Apache-2.0; licences in licenses/). Generated from fonts.json order; variable faces carry a weight range. */
 @font-face {
   font-family: "Anton";
   src: url("/fonts/Anton.ttf") format("truetype");
   font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "Archivo";
+  src: url("/fonts/Archivo.ttf") format("truetype");
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
   font-style: normal;
   font-display: block;
 }
@@ -14,8 +22,22 @@
   font-display: block;
 }
 @font-face {
+  font-family: "Bangers";
+  src: url("/fonts/Bangers.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
   font-family: "Bebas Neue";
   src: url("/fonts/BebasNeue.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "Bowlby One";
+  src: url("/fonts/BowlbyOne.ttf") format("truetype");
   font-weight: 400;
   font-style: normal;
   font-display: block;
@@ -42,9 +64,38 @@
   font-display: block;
 }
 @font-face {
+  font-family: "League Gothic";
+  src: url("/fonts/LeagueGothic.ttf") format("truetype");
+  font-weight: 400;
+  font-stretch: 75% 100%;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "Lilita One";
+  src: url("/fonts/LilitaOne.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "Montserrat";
+  src: url("/fonts/Montserrat.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
   font-family: "Oswald";
   src: url("/fonts/Oswald.ttf") format("truetype");
   font-weight: 200 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "Permanent Marker";
+  src: url("/fonts/PermanentMarker.ttf") format("truetype");
+  font-weight: 400;
   font-style: normal;
   font-display: block;
 }

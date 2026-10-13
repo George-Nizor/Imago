@@ -109,6 +109,7 @@ export const realApi: Api = {
     return () => es.close();
   },
   renderUrl: (id, n) => `/projects/${enc(id)}/renders/v${n}.png`,
+  feedUrl: (id, n) => `/projects/${enc(id)}/renders/v${n}-feed.png`,
   designUrl: (id, nonce) => `/projects/${enc(id)}/design.html?t=${nonce}`,
   assetUrl: (id, name) => `/projects/${enc(id)}/assets/${enc(name)}`,
 };

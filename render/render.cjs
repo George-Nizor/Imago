@@ -3,15 +3,23 @@
 // design.html -> png | jpg | webp, in a hidden Electron window.
 //
 //   electron --no-sandbox --no-zygote render/render.cjs --html=<file> --width=1280 --height=720 \
-//     [--scale=1] [--format=png|jpg|webp] --out=<file> --fonts=<dir>
+//     [--scale=1] [--format=png|jpg|webp] --out=<file> --fonts=<dir> [--measure] [--feed=<job.json>]
 //
 // Every request is refused except file:// inside the page's folder and /fonts/ mapped to --fonts,
 // so a design cannot reach the network or the rest of the disk. Prints one JSON line on success.
+//
+// --measure adds `measure` to that line: the visible text and images (DOM), the contrast behind each
+// text block (a second capture with the text hidden) and statistics of the render at feed size.
+// --feed=<job.json> then renders a staged feed page ({dir, width, out, neighbours: [{file?, meanLab?}]})
+// in the same process, under the same sandbox with its own folder as the only readable one, after
+// copying the render into it as thumb.png.
 
-const { app, BrowserWindow, protocol, net, session } = require("electron");
+const { app, BrowserWindow, protocol, net, session, nativeImage } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL, fileURLToPath } = require("node:url");
+const { domMeasure } = require("./dom-measure.cjs");
+const { backdropLuminance, pixelStats } = require("./measure.cjs");
 
 if (!app.commandLine.hasSwitch("no-zygote")) {
   console.error("run with --no-sandbox --no-zygote");
@@ -21,6 +29,9 @@ if (!app.commandLine.hasSwitch("no-zygote")) {
 // (the ozone switch is also passed by the caller); this covers the in-process case.
 app.commandLine.appendSwitch("disable-gpu");
 if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch("ozone-platform", "headless");
+
+// Closing the design window before the feed one opens must not end the process.
+app.on("window-all-closed", () => {});
 
 const flag = (name) => {
   const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -34,7 +45,11 @@ const scale = Number(flag("scale") ?? 1);
 const format = flag("format") ?? "png";
 const outFile = path.resolve(flag("out") ?? "");
 const fontsDir = path.resolve(flag("fonts") ?? "");
-const pageDir = fs.realpathSync(path.dirname(htmlFile));
+// The one folder the page being rendered may read; the feed page swaps in its own after the design is done.
+let pageDir = fs.realpathSync(path.dirname(htmlFile));
+const wantMeasure = process.argv.includes("--measure");
+const feedJob = flag("feed") ? JSON.parse(fs.readFileSync(path.resolve(flag("feed")), "utf8")) : null;
+const STATS_WIDTH = 320; // "feed size": statistics are taken on a copy this wide
 const JPEG_QUALITY = 92; // Electron takes 0-100: this is 0.92
 // The design document is served with no script-src at all (default-src 'none'), so a script the
 // validator missed still cannot run. Fonts and images come from file: (the project and /fonts/).
@@ -146,8 +161,96 @@ async function main() {
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   fs.writeFileSync(outFile, bytes);
   const final = image.getSize();
-  console.log(JSON.stringify({ ok: true, width: final.width, height: final.height, bytes: bytes.length }));
+  const result = { ok: true, width: final.width, height: final.height, bytes: bytes.length };
+  // The design is already on disk: a failure past this point costs the extras, not the render.
+  if (wantMeasure) {
+    try {
+      result.measure = await measureDesign(contents, image);
+    } catch (error) {
+      result.measureError = String(error?.message ?? error);
+    }
+  }
+  if (feedJob) {
+    win.destroy();
+    try {
+      result.feed = await renderFeed(feedJob);
+    } catch (error) {
+      result.feedError = String(error?.message ?? error);
+    }
+  }
+  console.log(JSON.stringify(result));
   app.exit(0);
+}
+
+const bitmapOf = (image, width) => {
+  const small = image.getSize().width > width ? image.resize({ width, quality: "good" }) : image;
+  const { width: w, height: h } = small.getSize();
+  return { bitmap: small.toBitmap(), w, h };
+};
+
+const nextFrames = (contents) => contents.executeJavaScript("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))");
+
+/** DOM boxes, the backdrop behind each text block and whole-image statistics. */
+async function measureDesign(contents, image) {
+  const dom = await contents.executeJavaScript(`(${domMeasure.toString()})()`);
+  const size = image.getSize();
+  const k = size.width / dom.canvas.w; // capture pixels per CSS pixel
+  if (dom.blocks.length) {
+    // Same page with every glyph made invisible: what is left is what the text sits on.
+    const key = await contents.insertCSS("*{color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:none!important;-webkit-text-stroke:0!important}text,tspan{fill:transparent!important;stroke:none!important}");
+    await nextFrames(contents);
+    await new Promise((r) => setTimeout(r, 30));
+    const bare = await contents.capturePage();
+    await contents.removeInsertedCSS(key);
+    const full = { bitmap: bare.toBitmap(), ...bare.getSize() };
+    for (const block of dom.blocks) {
+      block.backdrop = backdropLuminance(full.bitmap, full.width, full.height, { x: block.rect.x * k, y: block.rect.y * k, w: block.rect.w * k, h: block.rect.h * k });
+    }
+  }
+  const { bitmap, w, h } = bitmapOf(image, STATS_WIDTH);
+  return { ...dom, pixels: pixelStats(bitmap, w, h) };
+}
+
+/** Lab mean of an image file at thumbnail size, for the feed.distinct check. */
+function meanLabOf(file) {
+  const image = nativeImage.createFromPath(file);
+  if (image.isEmpty()) return null;
+  const { bitmap, w, h } = bitmapOf(image, 64);
+  return pixelStats(bitmap, w, h).meanLab;
+}
+
+async function renderFeed(job) {
+  const dir = fs.realpathSync(path.resolve(job.dir));
+  fs.copyFileSync(outFile, path.join(dir, "thumb.png"));
+  const neighbours = job.neighbours.map((n) => ({ meanLab: n.meanLab ?? (n.file ? meanLabOf(path.join(dir, n.file)) : null) }));
+  pageDir = dir;
+  const win = new BrowserWindow({
+    show: false,
+    width: job.width,
+    height: 4000, // taller than any feed; the capture is cropped to the page
+    useContentSize: true,
+    frame: false,
+    backgroundColor: "#ffffffff",
+    webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, backgroundThrottling: false, webSecurity: true, disableBlinkFeatures: "WebRTC" },
+  });
+  const contents = win.webContents;
+  contents.setWindowOpenHandler(() => ({ action: "deny" }));
+  contents.on("will-navigate", (event) => event.preventDefault());
+  contents.on("will-redirect", (event) => event.preventDefault());
+  await win.loadURL(pathToFileURL(path.join(dir, "index.html")).toString());
+  const pageHeight = await contents.executeJavaScript(`(async () => {
+    await document.fonts.ready;
+    await Promise.all([...document.images].map((img) => img.decode ? img.decode().catch(() => {}) : null));
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    return Math.ceil(document.body.getBoundingClientRect().height);
+  })()`);
+  if (!contents.isPainting()) contents.startPainting();
+  await new Promise((r) => setTimeout(r, 80));
+  const shot = await contents.capturePage({ x: 0, y: 0, width: job.width, height: Math.min(pageHeight, 4000) });
+  fs.mkdirSync(path.dirname(path.resolve(job.out)), { recursive: true });
+  fs.writeFileSync(path.resolve(job.out), shot.toPNG());
+  win.destroy();
+  return { width: shot.getSize().width, height: shot.getSize().height, neighbours };
 }
 
 app.whenReady().then(main).catch((error) => fail(`render failed: ${error?.stack ?? error}`));
