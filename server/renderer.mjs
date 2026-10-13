@@ -66,3 +66,36 @@ export async function renderHtml(config, { htmlFile, width, height, scale = 1, f
   }
   return JSON.parse(line);
 }
+
+/** Mean absolute difference (0-255) between an image file and a reference file, compared at the reference's size. */
+export async function differenceFrom(file, reference) {
+  const sharp = (await import("sharp")).default;
+  const ref = await sharp(reference).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const img = await sharp(file).removeAlpha().resize(ref.info.width, ref.info.height, { fit: "fill" }).raw().toBuffer();
+  let sum = 0;
+  for (let i = 0; i < img.length; i += 1) sum += Math.abs(img[i] - ref.data[i]);
+  return sum / img.length;
+}
+
+/**
+ * An export: renders like renderHtml, then checks the result against the version's own render at scale 1. At 3x a large
+ * layer (a cut-out under stacked drop-shadow filters) can take Chromium seconds to raster and was sometimes captured
+ * missing; a result that does not match is rendered again, up to three times, and the closest one is kept.
+ */
+export async function renderExport(config, options, reference) {
+  const usable = reference && options.scale !== 1 && fs.existsSync(reference);
+  let result = await renderHtml(config, options);
+  if (!usable) return result;
+  let difference = await differenceFrom(options.out, reference).catch(() => 0);
+  for (let attempt = 1; attempt < 3 && difference > 4; attempt += 1) {
+    const retry = `${options.out}.retry`;
+    const again = await renderHtml(config, { ...options, out: retry });
+    const d = await differenceFrom(retry, reference).catch(() => Infinity);
+    if (d < difference) {
+      await fs.promises.rename(retry, options.out);
+      result = again;
+      difference = d;
+    } else await fs.promises.rm(retry, { force: true });
+  }
+  return { ...result, difference: Math.round(difference * 100) / 100 };
+}

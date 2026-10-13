@@ -207,12 +207,26 @@ const nextFrames = (contents) => contents.executeJavaScript("new Promise((r) => 
 // mean every layer has reached the surface: a single capture of a big canvas (a 2560x1440 banner)
 // sometimes came back without its text or without an image. So force a repaint and capture until two
 // captures in a row are identical, which only happens once the page has settled.
+// Each capture waits for a frame the compositor actually painted after the repaint was asked for: two captures of the
+// same stale frame (before the zoom or a large image has landed) would otherwise look settled.
+const paintedFrame = (contents) =>
+  new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      contents.removeListener("paint", done);
+      resolve();
+    };
+    const timer = setTimeout(done, 1500);
+    contents.on("paint", done);
+    contents.invalidate();
+  });
+
 async function settledCapture(contents, rect, attempts = 8) {
   let previous = null;
   let image = null;
   for (let i = 0; i < attempts; i += 1) {
-    contents.invalidate();
     await nextFrames(contents);
+    await paintedFrame(contents);
     await new Promise((r) => setTimeout(r, i === 0 ? 120 : 60));
     image = rect ? await contents.capturePage(rect) : await contents.capturePage();
     const bitmap = image.toBitmap();

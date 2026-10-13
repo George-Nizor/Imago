@@ -4,7 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { validateDesignFile } from "./design-files.mjs";
-import { RenderError, renderHtml } from "./renderer.mjs";
+import { RenderError, renderExport } from "./renderer.mjs";
 import { createZipWriter } from "./zip.mjs";
 
 /** Just under 2 MB whichever way it is counted (2 MB = 2,097,152 bytes or 2,000,000). */
@@ -39,7 +39,7 @@ export async function renderJpg(config, store, id, { width, out, maxBytes = JPEG
   if (errors.length) throw new ExportError("INVALID_DESIGN", `${project.title}: ${errors.join(" ")}`, 422);
   const scale = width / project.size.width;
   try {
-    const done = await renderHtml(config, { htmlFile: path.join(dir, "design.html"), ...project.size, scale, format: "jpg", out, maxBytes });
+    const done = await renderExport(config, { htmlFile: path.join(dir, "design.html"), ...project.size, scale, format: "jpg", out, maxBytes }, path.join(dir, "renders", `v${project.current}.png`));
     return { width: done.width, height: done.height, bytes: done.bytes, quality: done.quality ?? 92, overBudget: done.bytes > maxBytes };
   } catch (error) {
     if (error instanceof RenderError) throw new ExportError("RENDER_FAILED", error.message, 503);

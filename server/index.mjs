@@ -18,7 +18,7 @@ import { validateDesignFile } from "./design-files.mjs";
 import { PathError, isProjectId, isSafeLeaf } from "./paths.mjs";
 import { isFaceId, readAllFaces, usable } from "./face-pack.mjs";
 import { EXPORT_SCALES, FACE_SOURCES, MAX_EXPORT_EDGE, MAX_SIDE, MIN_SIDE, PHOTO_ASPECTS, PLATFORMS, PRESETS, THUMBNAIL_FORMATS, allowedScales, briefPlatforms, presetById, thumbnailFormat } from "./presets/index.mjs";
-import { RenderError, renderHtml } from "./renderer.mjs";
+import { RenderError, renderExport } from "./renderer.mjs";
 import { StoreError, createStore } from "./store.mjs";
 import { FaceError, createFaces } from "./faces.mjs";
 
@@ -819,7 +819,7 @@ export function createServer(config = loadConfig(), deps = {}) {
       const name = `${id}-v${p.current || 0}-${scale}x.${format}`.slice(-120).replace(/^[^A-Za-z0-9]+/, "");
       const dir = store.dirOf(id);
       try {
-        const out = await renderHtml(config, { htmlFile: path.join(dir, "design.html"), ...p.size, scale, format, out: path.join(dir, "exports", name) });
+        const out = await renderExport(config, { htmlFile: path.join(dir, "design.html"), ...p.size, scale, format, out: path.join(dir, "exports", name) }, path.join(dir, "renders", `v${p.current}.png`));
         return sendJson(res, 200, { name, url: `/projects/${id}/exports/${name}`, width: out.width, height: out.height, bytes: out.bytes, credits });
       } catch (error) {
         if (error instanceof RenderError) throw new HttpError(503, "RENDER_FAILED", error.message);

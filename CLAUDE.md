@@ -46,7 +46,10 @@ Chromium with `?mock=1`.
 - **Renders must be settled.** `render.cjs` passes `disable-checker-imaging` (otherwise a large image, such as a cut-out under
   stacked `drop-shadow()` filters, is sometimes rastered without its pixels and never re-rastered offscreen) and captures
   through `settledCapture`, which repaints and captures until two captures match. Found 2026-10-13 on a 2560x1440 banner:
-  the same file rendered without its text or its face about one time in six.
+  the same file rendered without its text or its face about one time in six. Each capture also waits for a frame painted
+  after the repaint was asked for (`paintedFrame`), since two captures of one stale frame look settled. At 3x a cut-out under
+  stacked `drop-shadow()` filters can still take seconds to raster, so exports go through `renderExport`, which compares the
+  result with the version's 1x render and renders again (up to three times) when it does not match.
 - **Scale uses `setZoomFactor`.** Electron's `enableDeviceEmulation` segfaults offscreen, so the
   renderer zooms the page after load instead. Do not switch back.
 - **Stream-json fields.** `session_id` arrives on `system/init` and again on `result`; the cost is
