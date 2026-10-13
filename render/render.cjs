@@ -28,6 +28,10 @@ if (!app.commandLine.hasSwitch("no-zygote")) {
 // Nothing is shown. Without a display Chromium must be told on the command line to go headless
 // (the ozone switch is also passed by the caller); this covers the in-process case.
 app.commandLine.appendSwitch("disable-gpu");
+// Large images are otherwise decoded asynchronously and their tiles rastered without them first
+// ("checker-imaging"); offscreen, the re-raster sometimes never lands, and a banner came back with
+// its face missing. Decode synchronously into the raster instead.
+app.commandLine.appendSwitch("disable-checker-imaging");
 if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch("ozone-platform", "headless");
 
 // Closing the design window before the feed one opens must not end the process.
@@ -134,9 +138,7 @@ async function main() {
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   })()`);
   if (!contents.isPainting()) contents.startPainting();
-  await new Promise((r) => setTimeout(r, 120));
-
-  let image = await contents.capturePage();
+  let image = await settledCapture(contents);
   const size = image.getSize();
   const targetW = Math.round(width * scale);
   const targetH = Math.round(height * scale);
@@ -201,6 +203,25 @@ const bitmapOf = (image, width) => {
 
 const nextFrames = (contents) => contents.executeJavaScript("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))");
 
+// Offscreen Chromium paints a large page in tiles, and fonts.ready and img.decode() resolving does not
+// mean every layer has reached the surface: a single capture of a big canvas (a 2560x1440 banner)
+// sometimes came back without its text or without an image. So force a repaint and capture until two
+// captures in a row are identical, which only happens once the page has settled.
+async function settledCapture(contents, rect, attempts = 8) {
+  let previous = null;
+  let image = null;
+  for (let i = 0; i < attempts; i += 1) {
+    contents.invalidate();
+    await nextFrames(contents);
+    await new Promise((r) => setTimeout(r, i === 0 ? 120 : 60));
+    image = rect ? await contents.capturePage(rect) : await contents.capturePage();
+    const bitmap = image.toBitmap();
+    if (previous && bitmap.equals(previous)) return image;
+    previous = bitmap;
+  }
+  return image;
+}
+
 /** DOM boxes, the backdrop behind each text block and whole-image statistics. */
 async function measureDesign(contents, image) {
   const dom = await contents.executeJavaScript(`(${domMeasure.toString()})()`);
@@ -209,9 +230,7 @@ async function measureDesign(contents, image) {
   if (dom.blocks.length) {
     // Same page with every glyph made invisible: what is left is what the text sits on.
     const key = await contents.insertCSS("*{color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:none!important;-webkit-text-stroke:0!important}text,tspan{fill:transparent!important;stroke:none!important}");
-    await nextFrames(contents);
-    await new Promise((r) => setTimeout(r, 30));
-    const bare = await contents.capturePage();
+    const bare = await settledCapture(contents);
     await contents.removeInsertedCSS(key);
     const full = { bitmap: bare.toBitmap(), ...bare.getSize() };
     for (const block of dom.blocks) {
@@ -256,8 +275,7 @@ async function renderFeed(job) {
     return Math.ceil(document.body.getBoundingClientRect().height);
   })()`);
   if (!contents.isPainting()) contents.startPainting();
-  await new Promise((r) => setTimeout(r, 80));
-  const shot = await contents.capturePage({ x: 0, y: 0, width: job.width, height: Math.min(pageHeight, 4000) });
+  const shot = await settledCapture(contents, { x: 0, y: 0, width: job.width, height: Math.min(pageHeight, 4000) });
   fs.mkdirSync(path.dirname(path.resolve(job.out)), { recursive: true });
   fs.writeFileSync(path.resolve(job.out), shot.toPNG());
   win.destroy();
