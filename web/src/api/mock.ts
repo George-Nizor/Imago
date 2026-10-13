@@ -5,6 +5,10 @@
 import type {
   Api,
   AssetInfo,
+  Brand,
+  BrandAsset,
+  BrandInput,
+  FontCatalog,
   Capabilities,
   Check,
   ConceptSetView,
@@ -321,7 +325,114 @@ async function driveSet(id: string) {
 }
 const kitOf = (id: string | undefined) => KITS.find((k) => k.id === id);
 
+// ---- brands (stand-in) ----
+const fam = (family: string, weights: number[], role: string, category: string, axes?: Record<string, [number, number]>) => ({ family, file: `${family.replace(/ /g, "")}.ttf`, weights, variable: weights.length > 1, role, category, note: "", ...(axes && { axes }) });
+const FONTS: FontCatalog = {
+  families: [
+    fam("Anton", [400], "display", "sans"),
+    fam("Archivo", [100, 900], "display", "sans"),
+    fam("Bebas Neue", [400], "display", "sans"),
+    fam("Commissioner", [100, 900], "text", "sans", { FLAR: [0, 100], VOLM: [0, 100], slnt: [-12, 0] }),
+    fam("Fraunces", [100, 900], "display", "serif", { opsz: [9, 144], SOFT: [0, 100], WONK: [0, 1] }),
+    fam("Inter", [100, 900], "text", "sans"),
+    fam("Montserrat", [100, 900], "display", "sans"),
+    fam("Spline Sans Mono", [300, 700], "text", "mono"),
+  ],
+};
+const stamp = new Date().toISOString();
+const brands: Brand[] = [
+  {
+    id: "instrumenta-1a2b", name: "Instrumenta", description: "The suite's own look: warm brass, a teal pop and friendly, wonky serifs.",
+    colours: [
+      { name: "Brass", hex: "#D58E00", role: "primary" }, { name: "Imago teal", hex: "#00BCAB", role: "accent" },
+      { name: "Ink", hex: "#1B1B1F", role: "ink" }, { name: "Paper", hex: "#FFF8EC", role: "light" }, { name: "Coral", hex: "#ED7088", role: "extra" },
+    ],
+    fonts: { display: { family: "Fraunces", weight: 850, settings: '"SOFT" 100, "WONK" 1, "opsz" 144' }, support: { family: "Commissioner", weight: 500, settings: '"FLAR" 40' }, mono: { family: "Spline Sans Mono", weight: 500 } },
+    devices: ["A thick brass underline under the key word", "Soft rounded corners on every shape", "One small teal sparkle"],
+    guidance: "Warm and a little playful. Never neon. Keep the type big and friendly.",
+    assets: [], isDefault: true, createdAt: stamp, updatedAt: stamp,
+  },
+  {
+    id: "night-shift-3c4d", name: "Night Shift", description: "A dark, punchy gaming channel.",
+    colours: [{ name: "Void", hex: "#0B0D17", role: "ink" }, { name: "Volt", hex: "#C6FF3D", role: "primary" }, { name: "Hot pink", hex: "#FF3D8B", role: "accent" }, { name: "White", hex: "#FFFFFF", role: "light" }],
+    fonts: { display: { family: "Anton" }, support: { family: "Inter", weight: 600 } },
+    devices: ["A hard offset shadow"], guidance: "", assets: [], isDefault: false, createdAt: stamp, updatedAt: stamp,
+  },
+];
+let brandCounter = 100;
+const needBrand = (id: string) => {
+  const b = brands.find((x) => x.id === id);
+  if (!b) throw new ApiError("NOT_FOUND", "No such brand.", 404);
+  return b;
+};
+function snapshotBrand(p: MockProject, brandId: string | null | undefined) {
+  if (!brandId) return;
+  const b = needBrand(brandId);
+  p.brand = { id: b.id, name: b.name };
+  p.assets.push(...b.assets.map((a): AssetInfo => ({ name: `brand-${a.name}`, kind: "brand", width: a.width, height: a.height, from: null, brandKind: a.kind, note: a.note })));
+}
+
 export const mockApi: Api = {
+  async listFonts() {
+    return structuredClone(FONTS);
+  },
+  async listBrands() {
+    await wait(150);
+    return { items: structuredClone(brands), defaultId: brands.find((b) => b.isDefault)?.id ?? null };
+  },
+  async createBrand(body: BrandInput) {
+    if (!body.name?.trim()) throw new ApiError("BAD_NAME", "A brand needs a name.", 400);
+    if (!body.colours?.length) throw new ApiError("BAD_COLOURS", "A brand needs at least one colour.", 400);
+    if (brands.some((b) => b.name.toLowerCase() === body.name!.trim().toLowerCase())) throw new ApiError("EXISTS", `There is already a brand called "${body.name}".`, 409);
+    const now = new Date().toISOString();
+    const b: Brand = {
+      id: `${body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 30)}-${(++brandCounter).toString(16)}`, name: body.name.trim(), description: body.description ?? "", colours: body.colours,
+      fonts: body.fonts ?? { display: { family: "Fraunces" }, support: { family: "Commissioner" } }, devices: body.devices ?? [], guidance: body.guidance ?? "", assets: [], isDefault: false, createdAt: now, updatedAt: now,
+    };
+    if (body.isDefault) for (const x of brands) x.isDefault = false;
+    b.isDefault = body.isDefault === true;
+    brands.push(b);
+    await wait(200);
+    return structuredClone(b);
+  },
+  async updateBrand(id, patch) {
+    const b = needBrand(id);
+    if (patch.name !== undefined && !patch.name.trim()) throw new ApiError("BAD_NAME", "A brand needs a name.", 400);
+    if (patch.name && brands.some((x) => x.id !== id && x.name.toLowerCase() === patch.name!.trim().toLowerCase())) throw new ApiError("EXISTS", `There is already a brand called "${patch.name}".`, 409);
+    const { isDefault, ...rest } = patch;
+    Object.assign(b, rest);
+    if (isDefault !== undefined) {
+      if (isDefault) for (const x of brands) x.isDefault = false;
+      b.isDefault = isDefault;
+    }
+    b.updatedAt = new Date().toISOString();
+    await wait(150);
+    return structuredClone(b);
+  },
+  async deleteBrand(id) {
+    needBrand(id);
+    brands.splice(brands.findIndex((b) => b.id === id), 1);
+  },
+  async uploadBrandAsset(id, file, meta) {
+    const b = needBrand(id);
+    await wait(300);
+    const dims = await createImageBitmap(file).catch(() => null);
+    let name = file.name.replace(/[^A-Za-z0-9._-]+/g, "-");
+    while (b.assets.some((a) => a.name === name)) name = `2-${name}`;
+    const a: BrandAsset = { name, kind: meta.kind, note: meta.note, width: dims?.width ?? 600, height: dims?.height ?? 200, url: URL.createObjectURL(file) };
+    b.assets.push(a);
+    return structuredClone(a);
+  },
+  async updateBrandAsset(id, name, patch) {
+    const a = needBrand(id).assets.find((x) => x.name === name);
+    if (!a) throw new ApiError("NOT_FOUND", "No such asset.", 404);
+    Object.assign(a, patch);
+    return structuredClone(a);
+  },
+  async deleteBrandAsset(id, name) {
+    const b = needBrand(id);
+    b.assets = b.assets.filter((a) => a.name !== name);
+  },
   async listKits() {
     await wait(150);
     return { items: structuredClone(KITS), rejected: [] };
@@ -329,18 +440,19 @@ export const mockApi: Api = {
   async createConceptSet(body: CreateSetBody) {
     const kit = kitOf(body.kit);
     const brief: Record<string, string | string[]> = { ...body.brief, ...(kit ? { title: String(body.brief.title || kit.suggested.title) } : {}) };
+    const brand = body.brand ? needBrand(body.brand) : null;
     const title = body.title || String(brief.title || "Thumbnails");
     const id = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}-${(++counter).toString(36)}s`;
     const format = (String(brief.format ?? kit?.suggested.format ?? "video")) as ConceptSetView["format"];
     const concepts: ConceptView[] = [];
     for (let i = 0; i < body.count; i++) {
-      const made = await this.createProject({ preset: "thumbnail", title: `${title} · concept ${i + 1}`, brief: { ...brief, format } });
+      const made = await this.createProject({ preset: "thumbnail", title: `${title} · concept ${i + 1}`, brief: { ...brief, format }, brand: brand?.id });
       const p = projects.get(made.id)!;
       p.conceptSet = { id, index: i, archetype: null, label: null };
       concepts.push({ index: i, projectId: made.id, removed: false, state: "planning", error: null, archetype: null, label: null, idea: null, text: null, why: null, frame: null, title: p.title, current: 0, versionCount: 0, running: false, renderUrl: null, checks: { ok: 0, warn: 0, info: 0, warnings: [] }, progress: null });
     }
     const now = new Date().toISOString();
-    const view: ConceptSetView = { id, title, format, state: "draft", createdAt: now, updatedAt: now, count: body.count, kit: kit ? { id: kit.id, title: kit.title } : null, plan: { source: null, note: "" }, costUsd: 0, testCompare: format === "video", concepts };
+    const view: ConceptSetView = { id, title, format, state: "draft", createdAt: now, updatedAt: now, count: body.count, kit: kit ? { id: kit.id, title: kit.title } : null, brand: brand ? { id: brand.id, name: brand.name } : null, plan: { source: null, note: "" }, costUsd: 0, testCompare: format === "video", concepts };
     sets.set(id, { view, draftFiles: 0 });
     return structuredClone(view);
   },
@@ -521,6 +633,7 @@ export const mockApi: Api = {
       size, createdAt: now, updatedAt: now, sessionId: null, brief: body.brief as Record<string, string>, assets: [], messages: [],
       versions: [], current: null, running: false, renders: {}, sizeAuto, series: body.series ?? null, starred: false,
     };
+    snapshotBrand(p, body.brand);
     projects.set(id, p);
     await wait(300);
     return strip(p);

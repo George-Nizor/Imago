@@ -30,8 +30,13 @@ Detailed method is in `reference/craft/thumbnail/`. Read, with Read, before you 
 - Honesty: show only what the video delivers. Use the video's own frames and pictures and the
   owner's uploads. Stock images may set mood but never contradict the claim. No invented numbers,
   quotes, or fake interface.
-- The owner's face pack: when there is no better real frame (the video's own frame, an upload), and a
-  person suits the idea, `find_faces` then `use_face` give you a cut-out of the owner's own face with
+- Face source (the first message's `Face source:` line): `pack` means the face comes from the owner's
+  face pack at its best quality (the video's own face frames were not imported; use its screens,
+  pictures and palette); `video` means the kit's face frames; `auto` means choose between a graded
+  kit frame and the pack by fit and quality. A pack face beside the video's own art is honest; one
+  standing in for a moment or result the video did not capture is not.
+- The owner's face pack: when there is no better real frame (the video's own frame, an upload) or the face
+  source is `pack`, and a person suits the idea, `find_faces` then `use_face` give you a cut-out of the owner's own face with
   the expression and gaze you ask for. Read the "Using the face pack" part of `face-finishing.md`.
   A reused face is fine; it may not stand in for a moment or a result the video does not have.
 - One thing is clearly biggest (the face or the object), a second reads next, the rest recedes.

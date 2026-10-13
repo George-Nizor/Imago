@@ -4,6 +4,13 @@ When the video was made in Fabula, the first message may include a **From the vi
 material the film itself provides. Use it before anything else. It exists so that the thumbnail
 shows what the video shows and sounds like the video.
 
+The first message's `Face source:` line decides where faces come from. With `pack`, the face frames were
+not imported at all: use the owner's pack for the person (`find_faces` by the archetype's expression and
+gesture, gaze toward the text, then `use_face`) and use the kit's screens, pictures, hooks, story and
+palette around it. With `auto`, face frames carry a quality grade (`4k`, `hd`, `soft`: the pack's own
+grades) in the frame table and on the contact sheet; weigh fit against quality, and prefer a `4k` or
+`hd` frame to a `soft` one. With `video`, work as below.
+
 No face frame in the kit, or none that fits? The owner's face pack (`find_faces`, `use_face`, see
 `face-finishing.md`) is the next choice, never a stock photo of a person.
 
@@ -31,7 +38,9 @@ What it can hold (each appears only if there is something to say):
 3. Check the words on that frame: do they fit the claim? A frame with a laugh while the speaker
    says something sad confuses.
 4. Cut the face out with `cut_out` only if it needs a new background. Otherwise crop the frame.
-5. If no frame has a usable expression, use a `story-moment` or `object-hero` with a screen frame,
+5. With face source `auto`, compare the best frame with `find_faces` results: a sharp `4k` pack face with
+   the right expression beats a `soft` frame; the real frame wins when it is the moment the title promises.
+6. If no frame has a usable expression, use a `story-moment` or `object-hero` with a screen frame,
    and say so.
 
 ## Using the rest

@@ -14,3 +14,5 @@ import "./checks.test.mjs";
 import "./feed.test.mjs";
 import "./render-feed.test.mjs";
 import "./faces.test.mjs";
+import "./brands.test.mjs";
+import "./face-source.test.mjs";

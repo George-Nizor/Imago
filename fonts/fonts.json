@@ -84,6 +84,32 @@
       "note": "Roman capitals; cinematic and epic."
     },
     {
+      "family": "Commissioner",
+      "file": "Commissioner.ttf",
+      "weights": [
+        100,
+        900
+      ],
+      "variable": true,
+      "role": "text",
+      "category": "sans",
+      "note": "Brand v2 interface face: humanist sans with flare (FLAR 0-100) and volume (VOLM 0-100) axes and slant (slnt -12-0), plus weight 100-900.",
+      "axes": {
+        "FLAR": [
+          0,
+          100
+        ],
+        "VOLM": [
+          0,
+          100
+        ],
+        "slnt": [
+          -12,
+          0
+        ]
+      }
+    },
+    {
       "family": "DM Serif Display",
       "file": "DMSerifDisplay.ttf",
       "weights": [
@@ -93,6 +119,32 @@
       "role": "display",
       "category": "serif",
       "note": "High-contrast display serif; editorial."
+    },
+    {
+      "family": "Fraunces",
+      "file": "Fraunces.ttf",
+      "weights": [
+        100,
+        900
+      ],
+      "variable": true,
+      "role": "display",
+      "category": "serif",
+      "note": "Brand v2 display face: soft, wonky old-style serif. Weight 100-900 plus optical size (opsz 9-144), SOFT 0-100 and WONK 0-1.",
+      "axes": {
+        "opsz": [
+          9,
+          144
+        ],
+        "SOFT": [
+          0,
+          100
+        ],
+        "WONK": [
+          0,
+          1
+        ]
+      }
     },
     {
       "family": "Inter",
@@ -202,6 +254,18 @@
       "role": "text",
       "category": "sans",
       "note": "Geometric grotesk with character; tech."
+    },
+    {
+      "family": "Spline Sans Mono",
+      "file": "SplineSansMono.ttf",
+      "weights": [
+        300,
+        700
+      ],
+      "variable": true,
+      "role": "text",
+      "category": "mono",
+      "note": "Brand v2 code and number face; weight 300-700."
     }
   ]
 }

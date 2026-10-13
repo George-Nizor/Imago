@@ -1,13 +1,14 @@
 import { readFileSync } from "node:fs";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { readSeriesFile } from "./series.mjs";
+import { readSnapshot } from "./brands.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SpawnError, runProcess } from "./process.mjs";
 import { registerCutout, syncAssets } from "./assets.mjs";
 import { fontFamilies, highestVersion } from "./design-files.mjs";
-import { buildFirstPrompt, buildSystemPrompt, conceptSection, facesClassifySection, installCraft, plannerSection } from "./presets/index.mjs";
+import { buildFirstPrompt, brandSection, buildSystemPrompt, conceptSection, facesClassifySection, installCraft, plannerSection } from "./presets/index.mjs";
 import { kitPromptSection } from "./kits.mjs";
 import { SIGNED_OUT, interpretLine, summarizeTool } from "./stream-json.mjs";
 import { electronEnv } from "./renderer.mjs";
@@ -76,10 +77,16 @@ export async function seriesSection(config, project, projectDir) {
   return seriesText().replaceAll("{{name}}", name.replace(/[\r\n"]+/g, " "));
 }
 
-/** The text appended to Claude's system prompt for a turn. `series` is the series section, if any. */
-export function systemPromptFor(config, project, run = resolveRun(config), series = "", concept = null) {
+/** The "Brand" section from the project's own snapshot (`reference/brand.json`), "" for a project without one. */
+export async function brandSectionFor(projectDir) {
+  return brandSection(await readSnapshot(projectDir));
+}
+
+/** The text appended to Claude's system prompt for a turn: the series section, the brand section, "further", then the concept. */
+export function systemPromptFor(config, project, run = resolveRun(config), series = "", concept = null, brand = "") {
   let system = buildSystemPrompt(project, fontFamilies(config.fontsDir));
   if (series) system = `${system}\n\n${series}`;
+  if (brand) system = `${system}\n\n${brand}`;
   if (run.mode === "further") system = `${system}\n\n${furtherText()}`;
   // A concept-set turn: its own concept and the others, appended last.
   return concept ? `${system}\n\n${conceptSection(concept.concept, concept.siblings ?? [])}` : system;
@@ -92,7 +99,8 @@ export async function kitTextFor(config, project, projectDir) {
     const kit = JSON.parse(await readFile(path.join(projectDir, "reference", "kit.json"), "utf8"));
     const names = Object.fromEntries(project.assets.filter((a) => a.kitFile).map((a) => [a.kitFile, a.name]));
     const contactSheet = project.assets.some((a) => a.name === "kit-contact-sheet.png");
-    return kitPromptSection(kit, { contactSheet, fonts: fontFamilies(config.fontsDir), names });
+    const grades = Object.fromEntries(project.assets.filter((a) => a.kitFile && a.quality?.grade).map((a) => [a.kitFile, a.quality.grade]));
+    return kitPromptSection(kit, { contactSheet, fonts: fontFamilies(config.fontsDir), names, faceSource: project.brief?.faceSource, grades });
   } catch {
     return "";
   }
@@ -277,7 +285,7 @@ async function runTurnInner({ config, store, id, text, mode = "standard", modelK
     const promptDir = await mkdtemp(path.join(os.tmpdir(), "imago-prompt-"));
     const promptFile = path.join(promptDir, "system.md");
     try {
-      await writeFile(promptFile, systemPromptFor(config, project, run, await seriesSection(config, project, projectDir), concept), { mode: 0o600 });
+      await writeFile(promptFile, systemPromptFor(config, project, run, await seriesSection(config, project, projectDir), concept, await brandSectionFor(projectDir)), { mode: 0o600 });
       // A further turn renders more and may fetch images, so it gets twice the time.
       const timeoutMs = run.mode === "further" ? config.turnTimeoutMs * 2 : config.turnTimeoutMs;
       let outcome;
@@ -389,14 +397,14 @@ export function buildPlannerArgs(config, systemFile = "<system-prompt-file>") {
  * Runs the planning turn in `dir` (a folder with the kit's assets, the contact sheet and nothing of any
  * concept project) and leaves `concepts.json` there. Never throws; its session is never resumed.
  */
-export async function runPlanner({ config, dir, prompt, count, format, signal, onTool }) {
+export async function runPlanner({ config, dir, prompt, count, format, brand = null, signal, onTool }) {
   const promptDir = await mkdtemp(path.join(os.tmpdir(), "imago-prompt-"));
   const promptFile = path.join(promptDir, "system.md");
   const seen = { result: null };
   let chain = Promise.resolve();
   try {
     await installCraft({ preset: "thumbnail" }, dir).catch(() => {});
-    await writeFile(promptFile, plannerSection({ count, format }), { mode: 0o600 });
+    await writeFile(promptFile, plannerSection({ count, format, brand }), { mode: 0o600 });
     let outcome;
     try {
       outcome = await runProcess({

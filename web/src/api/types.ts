@@ -6,9 +6,14 @@ export interface Size {
 }
 export interface AssetInfo {
   name: string;
-  kind: "upload" | "cutout" | "stock" | "reference" | "kit" | "face";
+  kind: "upload" | "cutout" | "stock" | "reference" | "kit" | "face" | "brand";
   /** A face copied in from the face pack. */
   faceId?: string;
+  /** A brand file copied in at creation (`brand-<name>`): its kind (logo, mascot, other) and the owner's note. */
+  brandKind?: BrandAssetKind;
+  note?: string;
+  /** A kit face frame graded like a pack face (face source "auto"). */
+  quality?: { grade: "4k" | "hd" | "soft"; faceHeightPx: number; sharpness: number | null };
   width: number;
   height: number;
   from: string | null;
@@ -70,6 +75,8 @@ export interface Project {
   starred?: boolean;
   /** Set when this project is one concept of a set (archetype and label are null until the plan is made). */
   conceptSet?: ConceptTag | null;
+  /** The brand snapshotted into the project (its colours and fonts are in reference/brand.json). */
+  brand?: { id: string; name: string };
   /** Set when the project was started from a Fabula kit. */
   kit?: { id: string; title: string; project: string; createdAt: string; contactSheet: boolean };
 }
@@ -223,6 +230,7 @@ export interface ConceptSetView {
   updatedAt: string;
   count: number;
   kit: { id: string; title: string } | null;
+  brand?: { id: string; name: string } | null;
   plan: { source: "planner" | "fallback" | null; note: string };
   costUsd: number;
   /** Only 16:9 sets can go to YouTube's Test & Compare. */
@@ -289,13 +297,74 @@ export interface CreateBody {
   series?: string;
   /** A Fabula kit id from `listKits`: its frames and pictures are imported and the brief is prefilled. */
   kit?: string;
+  /** A brand id from `listBrands`; null or omitted means no brand. */
+  brand?: string | null;
 }
 export interface CreateSetBody {
   title?: string;
   brief: Record<string, string | string[]>;
   kit?: string;
+  brand?: string | null;
   /** 2 to 4. */
   count: number;
+}
+
+// ---- brands ----
+export const BRAND_ROLES = ["primary", "accent", "ink", "light", "extra"] as const;
+export type BrandRole = (typeof BRAND_ROLES)[number];
+export const BRAND_ASSET_KINDS = ["logo", "mascot", "other"] as const;
+export type BrandAssetKind = (typeof BRAND_ASSET_KINDS)[number];
+export interface BrandColour {
+  name: string;
+  hex: string;
+  role: BrandRole;
+}
+export interface BrandFont {
+  family: string;
+  weight?: number;
+  /** font-variation-settings, e.g. `"SOFT" 100, "WONK" 1`. */
+  settings?: string;
+}
+export interface BrandAsset {
+  name: string;
+  kind: BrandAssetKind;
+  note: string;
+  width: number;
+  height: number;
+  url: string;
+}
+export interface Brand {
+  id: string;
+  name: string;
+  description: string;
+  colours: BrandColour[];
+  fonts: { display: BrandFont; support: BrandFont; mono?: BrandFont };
+  devices: string[];
+  guidance: string;
+  assets: BrandAsset[];
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+/** What a create or update sends; assets and the default flag have their own calls or fields. */
+export type BrandInput = Partial<Pick<Brand, "name" | "description" | "colours" | "fonts" | "devices" | "guidance" | "isDefault">>;
+export interface BrandList {
+  items: Brand[];
+  defaultId: string | null;
+}
+export interface FontFamily {
+  family: string;
+  file: string;
+  weights: number[];
+  variable: boolean;
+  role: string;
+  category: string;
+  note: string;
+  stretch?: number[];
+  axes?: Record<string, [number, number]>;
+}
+export interface FontCatalog {
+  families: FontFamily[];
 }
 
 /** Everything the screens need from a server; the real client and the mock both implement it. */
@@ -348,6 +417,14 @@ export interface FacePatch {
 
 export interface Api {
   capabilities(): Promise<Capabilities>;
+  listFonts(): Promise<FontCatalog>;
+  listBrands(): Promise<BrandList>;
+  createBrand(body: BrandInput): Promise<Brand>;
+  updateBrand(id: string, patch: BrandInput): Promise<Brand>;
+  deleteBrand(id: string): Promise<void>;
+  uploadBrandAsset(id: string, file: File, meta: { kind: BrandAssetKind; note: string }): Promise<BrandAsset>;
+  updateBrandAsset(id: string, name: string, patch: { kind?: BrandAssetKind; note?: string }): Promise<BrandAsset>;
+  deleteBrandAsset(id: string, name: string): Promise<void>;
   presets(): Promise<PresetInfo[]>;
   listProjects(query?: ListQuery): Promise<ProjectList>;
   patchProject(id: string, patch: { title?: string; starred?: boolean; series?: string | null }): Promise<Project>;

@@ -52,6 +52,14 @@ export const PLATFORMS = {
 export const briefPlatforms = (brief) =>
   Array.isArray(brief?.platforms) ? [...new Set(brief.platforms.filter((p) => typeof p === "string" && Object.hasOwn(PLATFORMS, p)))] : [];
 
+/** Where a thumbnail's face comes from: the owner's pack, the video's own frames, or Claude's choice. */
+export const FACE_SOURCES = ["pack", "video", "auto"];
+export const FACE_SOURCE_LINES = {
+  pack: "the owner's face pack (find_faces, then use_face), chosen for the concept's emotion and gesture and graded for quality. The video's own face frames were not imported; its screens, pictures, story, hooks and palette were. A pack face is the owner, not a moment of the video: it may sit beside the video's own art and screens, but never stands in for a moment or result the video did not capture.",
+  video: "the video's own face frames, as in the \"From the video\" section.",
+  auto: "your choice: a video face frame (graded 4k, hd or soft in the frame table, the same grades as the pack) or a pack face. Pick the best by fit and quality, and say which you used.",
+};
+
 export const thumbnailFormat = (id) => THUMBNAIL_FORMATS.find((f) => f.id === id);
 
 // Current official or recommended pixel sizes. Print sizes are at 150 dpi. Facebook's cover is its
@@ -166,7 +174,7 @@ export function buildSystemPrompt(project, fontFamilies = []) {
   rules ??= text("design-rules.md");
   if (!presetText.has(project.preset)) presetText.set(project.preset, text(`${project.preset}.md`));
   const assets = project.assets.length
-    ? project.assets.map((a) => `- assets/${a.name} (${a.width}×${a.height}${a.kind === "cutout" ? ", cut-out with transparency" : a.kind === "face" ? ", a face from the owner's face pack, cut out with transparency" : ""})`).join("\n")
+    ? project.assets.map((a) => `- assets/${a.name} (${a.width}×${a.height}${a.kind === "cutout" ? ", cut-out with transparency" : a.kind === "brand" ? `, brand ${a.brandKind ?? "asset"} (optional to use)` : a.kind === "face" ? ", a face from the owner's face pack, cut out with transparency" : ""})`).join("\n")
     : "(none uploaded)";
   return [
     rules,
@@ -184,6 +192,7 @@ export function buildFirstPrompt(project, userText, kitText = "") {
     const value = String(project.brief?.[field.id] ?? "").trim();
     if (value) lines.push(`${field.label}: ${value}`);
   }
+  if (project.preset === "thumbnail" && FACE_SOURCES.includes(project.brief?.faceSource)) lines.push(`Face source: ${FACE_SOURCE_LINES[project.brief.faceSource]}`);
   if (project.preset === "photo" && project.brief?.aspect && project.brief.aspect !== "original") lines.push(`Aspect ratio: ${project.brief.aspect}`);
   const brief = lines.length ? `Brief:\n${lines.join("\n")}\n\n` : "";
   return `${brief}${kitText ? `${kitText}\n\n` : ""}${userText}`.trim();
@@ -221,6 +230,52 @@ export function describeConcept(c) {
 let plannerPrompt;
 let conceptPrompt;
 let facesPrompt;
+let brandPrompt;
+let brandPlannerPrompt;
+
+const ROLE_ORDER = ["primary", "accent", "ink", "light", "extra"];
+const ROLE_NOTES = {
+  primary: "the brand's main colour: big grounds, the lead shape",
+  accent: "the pop: the one thing that should draw the eye",
+  ink: "the dark: type and strokes on light, or the deep ground",
+  light: "the light: type on dark, or the paper ground",
+  extra: "supporting colour, sparingly",
+};
+const FONT_SLOTS = [
+  ["display", "Display (headlines, the big words)"],
+  ["support", "Support (secondary text, labels, subtitles)"],
+  ["mono", "Mono (numbers, tags, small technical text)"],
+];
+// One line of owner-supplied text: no control characters, so it cannot start a new section.
+const oneLine = (value, max = 200) => String(value ?? "").replace(/\p{Cc}+/gu, " ").replace(/\s+/g, " ").trim().slice(0, max);
+
+/** The "Brand" section for a project's `reference/brand.json` snapshot (or the planner's copy of it). "" for no snapshot. */
+export function brandSection(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || !Array.isArray(snapshot.colours) || !snapshot.fonts) return "";
+  brandPrompt ??= text("brand.md");
+  const colours = snapshot.colours.filter((c) => c && typeof c.hex === "string");
+  const palette = ROLE_ORDER.flatMap((role) => colours.filter((c) => c.role === role).map((c) => `- ${role}: ${oneLine(c.name, 40)} ${c.hex} (${ROLE_NOTES[role]})`)).join("\n") || "(no colours)";
+  const fonts = FONT_SLOTS.flatMap(([slot, label]) => {
+    const f = snapshot.fonts[slot];
+    if (!f?.family) return [];
+    const css = [`font-family: "${oneLine(f.family, 60)}"`, f.weight ? `font-weight: ${Number(f.weight) || 400}` : "", f.settings ? `font-variation-settings: ${oneLine(f.settings, 200)}` : ""].filter(Boolean).join("; ");
+    return [`- ${label}: ${css};`];
+  }).join("\n") || "(no fonts)";
+  const devices = (snapshot.devices ?? []).map((d) => `- ${oneLine(d, 240)}`).join("\n") || "(none given)";
+  const guidance = String(snapshot.guidance ?? "").replace(/\r\n?/g, "\n").trim();
+  const assets = (snapshot.assets ?? []).length
+    ? `Optional to use: bring one in only when it helps the design. If you do, keep its proportions and do not redraw or recolour it. Read an asset with Read to see it.\n\n${snapshot.assets.map((a) => `- assets/${a.file} (${oneLine(a.kind, 20)}, ${Number(a.width) || 0}×${Number(a.height) || 0})${a.note ? `: ${oneLine(a.note, 240)}` : ""}`).join("\n")}`
+    : "(no logo or mascot files; none are needed)";
+  return fill(brandPrompt, {
+    name: oneLine(snapshot.name, 60),
+    description: oneLine(snapshot.description, 600),
+    palette,
+    fonts,
+    devices,
+    guidance: guidance ? guidance.replace(/^/gm, "> ") : "(none)",
+    assets,
+  }).replace(/\n{3,}/g, "\n\n");
+}
 
 /** The face classifier's system prompt: faces-classify.md with {{count}} filled in. */
 export function facesClassifySection({ count = 1 } = {}) {
@@ -229,9 +284,13 @@ export function facesClassifySection({ count = 1 } = {}) {
 }
 
 /** The planning turn's system prompt: planner.md with {{count}} and {{format}} filled in. */
-export function plannerSection({ count = 3, format = "video" } = {}) {
+export function plannerSection({ count = 3, format = "video", brand = null } = {}) {
   plannerPrompt ??= text("planner.md");
-  return fill(plannerPrompt, { count, format: FORMAT_WORDS[format] ?? FORMAT_WORDS.video });
+  const base = fill(plannerPrompt, { count, format: FORMAT_WORDS[format] ?? FORMAT_WORDS.video });
+  const section = brandSection(brand);
+  if (!section) return base;
+  brandPlannerPrompt ??= text("brand-planner.md");
+  return `${base}\n\n${section}\n\n${brandPlannerPrompt}`;
 }
 
 /** The section appended to one concept's design turn: its own concept and the others in the set. */

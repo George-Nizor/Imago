@@ -205,6 +205,11 @@ function Toolbar({ project, run, onProject }: { project: Project; run: Run; onPr
           {fmtSize(project.size)}{project.current ? ` · v${project.current}` : ""}
         </span>
         {seriesName && <span className="series-chip static">{seriesName}</span>}
+        {project.brand && (
+          <a className="series-chip brand-chip" href="/brands" title="The brand this project was started with (a copy; editing the brand later does not change it)" onClick={(e) => { e.preventDefault(); navigate("/brands"); }}>
+            Brand · {project.brand.name}
+          </a>
+        )}
         {project.conceptSet && (
           <a className="series-chip set-chip" href={`/c/${project.conceptSet.id}`} onClick={(e) => { e.preventDefault(); navigate(`/c/${project.conceptSet!.id}`); }}>
             Concept {project.conceptSet.index + 1}{project.conceptSet.label ? ` · ${project.conceptSet.label}` : ""} · compare

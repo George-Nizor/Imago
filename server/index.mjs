@@ -9,14 +9,15 @@ import { loadConfig, packageVersion } from "./config.mjs";
 import { StyleReferenceError, copyStyleReference, hasReference, queryProjects } from "./library.mjs";
 import { SeriesError, createSeriesStore } from "./series.mjs";
 import { createZipWriter } from "./zip.mjs";
+import { BrandError, cloneSnapshot, createBrands, snapshotIntoProject } from "./brands.mjs";
 import { cutOut as defaultCutOut } from "./cutout.mjs";
 import { SetError, createConceptSets } from "./concept-sets.mjs";
 import { ExportError, JPEG_BUDGET, PLATFORM_EXPORTS, asciiSlug, renderJpg, writeZip } from "./exports.mjs";
 import { KitError, discoverKits, findKit, importKitInto, kitFilePath, kitSummary, suggestedBrief } from "./kits.mjs";
 import { validateDesignFile } from "./design-files.mjs";
 import { PathError, isProjectId, isSafeLeaf } from "./paths.mjs";
-import { isFaceId } from "./face-pack.mjs";
-import { EXPORT_SCALES, MAX_EXPORT_EDGE, MAX_SIDE, MIN_SIDE, PHOTO_ASPECTS, PLATFORMS, PRESETS, THUMBNAIL_FORMATS, allowedScales, briefPlatforms, presetById, thumbnailFormat } from "./presets/index.mjs";
+import { isFaceId, readAllFaces, usable } from "./face-pack.mjs";
+import { EXPORT_SCALES, FACE_SOURCES, MAX_EXPORT_EDGE, MAX_SIDE, MIN_SIDE, PHOTO_ASPECTS, PLATFORMS, PRESETS, THUMBNAIL_FORMATS, allowedScales, briefPlatforms, presetById, thumbnailFormat } from "./presets/index.mjs";
 import { RenderError, renderHtml } from "./renderer.mjs";
 import { StoreError, createStore } from "./store.mjs";
 import { FaceError, createFaces } from "./faces.mjs";
@@ -94,6 +95,7 @@ export function createServer(config = loadConfig(), deps = {}) {
   const cutOut = deps.cutOut ?? defaultCutOut;
   const store = createStore(config.projectsDir);
   const seriesStore = createSeriesStore(config.dataDir);
+  const brands = createBrands({ config });
   const capabilities = createCapabilities(config);
   // id -> {controller, done, active}: the running turn (or a restore holding the slot) and its
   // completion. `active` goes false when the slot is released (just before the turn's last event, so
@@ -180,6 +182,7 @@ export function createServer(config = loadConfig(), deps = {}) {
   const faces = createFaces({ config, cutOutFile: deps.cutOutFile });
   const sets = createConceptSets({
     faces,
+    brands,
     config,
     store,
     createProject: (body, opts) => createProject(body, opts),
@@ -190,15 +193,22 @@ export function createServer(config = loadConfig(), deps = {}) {
 
   // ---- API ---------------------------------------------------------------------------------
 
+  const packReadyCount = async () => (await readAllFaces(config.dataDir)).filter(usable).length;
+
   /** The thumbnail brief from what the form sent, with a kit's suggestions filling the blanks. */
-  function thumbnailBrief(given, kit) {
+  function thumbnailBrief(given, kit, packReady = 0) {
     const suggested = kit ? suggestedBrief(kit.kit) : {};
     const merged = {};
     for (const key of ["title", "channelColours", "notes", "format"]) merged[key] = cleanText(given[key], 4000) || suggested[key] || "";
     const format = merged.format || "video";
     const chosen = thumbnailFormat(format);
     if (!chosen) throw new HttpError(400, "BAD_FORMAT", `format must be one of ${THUMBNAIL_FORMATS.map((f) => f.id).join(", ")}.`);
-    const brief = { title: merged.title, channelColours: merged.channelColours, notes: merged.notes, format };
+    // Where the face comes from. Left out, it is the owner's pack whenever the pack has a ready face, else the video's own frames.
+    let faceSource = given.faceSource;
+    if (faceSource === undefined || faceSource === null || faceSource === "") faceSource = packReady > 0 ? "pack" : "video";
+    if (!FACE_SOURCES.includes(faceSource)) throw new HttpError(400, "BAD_FACE_SOURCE", `faceSource must be one of ${FACE_SOURCES.join(", ")}.`);
+    if (faceSource === "pack" && packReady === 0) throw new HttpError(400, "NO_PACK_FACES", "The face pack has no ready faces yet; choose the video's frames or let Claude decide.");
+    const brief = { title: merged.title, channelColours: merged.channelColours, notes: merged.notes, format, faceSource };
     if (given.platforms !== undefined) {
       if (!Array.isArray(given.platforms)) throw new HttpError(400, "BAD_PLATFORMS", `platforms must be a list of ${Object.keys(PLATFORMS).join(", ")}.`);
       if (format === "shorts") brief.platforms = briefPlatforms(given);
@@ -224,7 +234,7 @@ export function createServer(config = loadConfig(), deps = {}) {
     let size = preset.defaultSize ?? { width: 1280, height: 720 };
     let extra = { ...opts.extra };
     if (preset.id === "thumbnail") {
-      const made = thumbnailBrief(given, kit);
+      const made = thumbnailBrief(given, kit, await packReadyCount());
       Object.assign(brief, made.brief);
       size = made.size;
     } else for (const field of preset.briefFields) brief[field.id] = cleanText(given[field.id], 4000);
@@ -246,16 +256,24 @@ export function createServer(config = loadConfig(), deps = {}) {
       seriesId = await knownSeries(body.series);
       extra = { ...extra, series: seriesId };
     }
+    // A brand is named by id ("none", null or nothing: no brand) and snapshotted into the project, so editing it later changes nothing here.
+    // A caller that makes several projects from one brand (a concept set) resolves it once and passes it in `opts.brand`.
+    const wanted = body.brand;
+    const brand = opts.brand ?? (opts.cloneFrom || wanted === undefined || wanted === null || wanted === "" || wanted === "none" ? null : await brands.resolve(wanted));
     const created = await store.create({ preset: preset.id, title, size, brief, extra });
     try {
-      if (kit) await importKitInto(config, store, created.id, kit, { sheetFrom: opts.sheetFrom });
-      else if (opts.cloneFrom) await cloneKitMaterial(opts.cloneFrom, created.id);
+      if (kit) await importKitInto(config, store, created.id, kit, { sheetFrom: opts.sheetFrom, faceSource: brief.faceSource });
+      else if (opts.cloneFrom) {
+        await cloneKitMaterial(opts.cloneFrom, created.id);
+        await cloneSnapshot(store, opts.cloneFrom, created.id);
+      }
+      if (brand) await snapshotIntoProject(store, created.id, brand.brand, brand.dir);
     } catch (error) {
       await store.remove(created.id).catch(() => {});
       throw error;
     }
     if (seriesId) await ensureReference(created.id, seriesId);
-    return kit || opts.cloneFrom ? store.read(created.id) : created;
+    return kit || opts.cloneFrom || brand ? store.read(created.id) : created;
   }
 
   /** Copies a donor project's kit images, uploads and kit.json into another project (for "another concept"). */
@@ -335,6 +353,7 @@ export function createServer(config = loadConfig(), deps = {}) {
     const created = await createProject({ preset: source.preset, title: cleanText(body.title, 80) || undefined, size: source.size, brief, series: series.id });
     try {
       await copyStyleReference(store, id, created.id);
+      await cloneSnapshot(store, id, created.id); // the new episode keeps the source's brand, as it was snapshotted
     } catch (error) {
       await store.remove(created.id).catch(() => {});
       throw error;
@@ -523,10 +542,11 @@ export function createServer(config = loadConfig(), deps = {}) {
       if (!Number.isInteger(count) || count < 2 || count > 4) throw new HttpError(400, "BAD_COUNT", "A concept set holds 2 to 4 concepts; for one design make an ordinary project.");
       const kit = body.kit !== undefined && body.kit !== null ? await kitFor(body.kit) : null;
       const given = body.brief && typeof body.brief === "object" ? body.brief : {};
-      const { brief } = thumbnailBrief(given, kit);
+      const { brief } = thumbnailBrief(given, kit, await packReadyCount());
       const title = cleanText(body.title, 80) || brief.title || "Thumbnails";
       if (!brief.title) throw new HttpError(400, "NEEDS_TITLE", "A concept set needs a title or topic.");
-      const set = await sets.create({ title, brief, kit, count, format: brief.format, createProject });
+      const brand = body.brand === undefined || body.brand === null || body.brand === "" || body.brand === "none" ? null : await brands.resolve(body.brand);
+      const set = await sets.create({ title, brief, kit, count, format: brief.format, brand, createProject });
       return sendJson(res, 201, await sets.view(set.id));
     }
     if (!isProjectId(b)) throw new HttpError(400, "BAD_ID", "Invalid concept set id.");
@@ -549,6 +569,40 @@ export function createServer(config = loadConfig(), deps = {}) {
     if (c === "another") return sendJson(res, 202, await sets.another(b));
     if (c === "test-compare") return sendJson(res, 200, await testCompare(b, await readJson(req)));
     throw new HttpError(404, "NOT_FOUND", "Unknown API route.");
+  }
+
+  async function brandsApi(req, res, b, c, d) {
+    const method = req.method;
+    if (!b) {
+      if (method === "GET") return sendJson(res, 200, await brands.list());
+      if (method === "POST") return sendJson(res, 201, await brands.create(await readJson(req)));
+      throw new HttpError(405, "METHOD", "Method not allowed.");
+    }
+    if (!isProjectId(b)) throw new HttpError(400, "BAD_ID", "Invalid brand id.");
+    if (!c) {
+      if (method === "GET") return sendJson(res, 200, await brands.get(b));
+      if (method === "PATCH") return sendJson(res, 200, await brands.update(b, await readJson(req)));
+      if (method === "DELETE") {
+        await brands.remove(b);
+        return sendJson(res, 200, { ok: true });
+      }
+      throw new HttpError(405, "METHOD", "Method not allowed.");
+    }
+    if (c !== "assets") throw new HttpError(404, "NOT_FOUND", "Unknown API route.");
+    if (!d) {
+      if (method !== "POST") throw new HttpError(405, "METHOD", "Method not allowed.");
+      await brands.get(b);
+      const { filename, bytes } = await uploadBytes(req);
+      const query = new URL(req.url ?? "/", "http://localhost").searchParams;
+      return sendJson(res, 201, await brands.addAsset(b, filename, bytes, { kind: query.get("kind") ?? undefined, note: query.get("note") ?? undefined }));
+    }
+    if (!isSafeLeaf(d)) throw new HttpError(400, "BAD_NAME", "Invalid asset name.");
+    if (method === "PATCH") return sendJson(res, 200, await brands.updateAsset(b, d, await readJson(req)));
+    if (method === "DELETE") {
+      await brands.removeAsset(b, d);
+      return sendJson(res, 200, { ok: true });
+    }
+    throw new HttpError(405, "METHOD", "Method not allowed.");
   }
 
   /** Vertical covers: YouTube Shorts 2160x3840, Reels and TikTok 1080x1920, JPG under 2 MB; several make a zip. */
@@ -599,6 +653,7 @@ export function createServer(config = loadConfig(), deps = {}) {
     }
     if (a === "concept-sets") return conceptApi(req, res, b, c);
     if (a === "faces") return facesApi(req, res, b, c);
+    if (a === "brands") return brandsApi(req, res, b, c, d);
     if (a !== "projects") throw new HttpError(404, "NOT_FOUND", "Unknown API route.");
 
     if (!b) {
@@ -824,6 +879,16 @@ export function createServer(config = loadConfig(), deps = {}) {
     return sendFile(res, file, { "content-security-policy": FILE_CSP });
   }
 
+  /** A brand's declared assets, as images only. */
+  async function brandFiles(res, segs) {
+    // ["", "brands", id, "assets", leaf]
+    const [, , id, area, leaf, extra] = segs;
+    if (!id || area !== "assets" || !leaf || extra || !isSafeLeaf(leaf) || !IMAGE_EXTENSIONS.has(path.extname(leaf).toLowerCase())) throw new HttpError(404, "NOT_FOUND", "Not found.");
+    const file = await brands.servable(id, leaf);
+    if (!file) throw new HttpError(404, "NOT_FOUND", "Not found.");
+    return sendFile(res, file, { "content-security-policy": FILE_CSP });
+  }
+
   /** A set's finished export zip. */
   async function setExports(res, segs) {
     // ["", "concept-sets", id, "exports", file]
@@ -875,6 +940,8 @@ export function createServer(config = loadConfig(), deps = {}) {
       if (req.method !== "GET" && req.method !== "HEAD") throw new HttpError(405, "METHOD", "Method not allowed.");
       if (segs[1] === "projects") return await projectFiles(res, segs, (id) => `/projects/${id}/`);
       if (segs[1] === "kits") return await kitFiles(res, segs);
+      // /brands alone is the UI page; only /brands/<id>/assets/<file> is a file.
+      if (segs[1] === "brands" && segs[2]) return await brandFiles(res, segs);
       // /faces alone is the UI page; only /faces/<id>/... is a file.
       if (segs[1] === "faces" && segs[2]) return await faceFiles(res, segs);
       if (segs[1] === "concept-sets") return await setExports(res, segs);
@@ -885,7 +952,7 @@ export function createServer(config = loadConfig(), deps = {}) {
       }
       return await webFiles(res, url.pathname);
     } catch (error) {
-      const known = error instanceof HttpError || error instanceof StoreError || error instanceof UploadError || error instanceof SeriesError || error instanceof StyleReferenceError || error instanceof KitError || error instanceof SetError || error instanceof FaceError || error instanceof ExportError;
+      const known = error instanceof HttpError || error instanceof StoreError || error instanceof UploadError || error instanceof SeriesError || error instanceof StyleReferenceError || error instanceof KitError || error instanceof SetError || error instanceof FaceError || error instanceof BrandError || error instanceof ExportError;
       const status = known ? error.status : error instanceof PathError ? 400 : 500;
       const code = known ? error.code : error instanceof PathError ? "BAD_PATH" : "INTERNAL";
       if (res.headersSent) return res.end();

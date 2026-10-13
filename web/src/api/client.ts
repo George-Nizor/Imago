@@ -50,6 +50,23 @@ const filenameHeader = (name: string) => enc(name || "pasted.png");
 
 export const realApi: Api = {
   capabilities: () => call("/api/capabilities"),
+  listFonts: () => call("/api/fonts"),
+  listBrands: () => call("/api/brands"),
+  createBrand: (body) => call("/api/brands", json("POST", body)),
+  updateBrand: (id, patch) => call(`/api/brands/${enc(id)}`, json("PATCH", patch)),
+  deleteBrand: async (id) => {
+    await call(`/api/brands/${enc(id)}`, { method: "DELETE" });
+  },
+  uploadBrandAsset: (id, file, meta) =>
+    call(`/api/brands/${enc(id)}/assets?kind=${enc(meta.kind)}&note=${enc(meta.note)}`, {
+      method: "POST",
+      headers: { "x-filename": filenameHeader(file.name), "content-type": file.type || "application/octet-stream" },
+      body: file,
+    }),
+  updateBrandAsset: (id, name, patch) => call(`/api/brands/${enc(id)}/assets/${enc(name)}`, json("PATCH", patch)),
+  deleteBrandAsset: async (id, name) => {
+    await call(`/api/brands/${enc(id)}/assets/${enc(name)}`, { method: "DELETE" });
+  },
   presets: () => call("/api/presets"),
   listProjects: (q = {}) => {
     const params = new URLSearchParams();

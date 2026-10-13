@@ -30,6 +30,7 @@ Imago/
 │   ├── concept-sets.mjs   concept sets: planner, parallel design turns, fallback, cancel, another concept
 │   ├── faces.mjs       the face pack: uploads, cut-out queue, classification batches (face.json is written only here)
 │   ├── face-pack.mjs   the pack's vocabulary, label validation, quality grade, ranking, use_face; read by the server and the render MCP
+│   ├── brands.mjs      brands: validation, CRUD, assets, and the snapshot into a project or a concept set's planner folder (see Brands)
 │   ├── face-sheet.mjs  numbered contact sheets of face images (classifier batch, planner pack sheet, find_faces)
 │   ├── exports.mjs     Test & Compare and per-platform JPG exports under a size budget
 │   └── presets/        design-rules.md, thumbnail.md, photo.md, graphic.md, series.md, further.md, planner.md, concept.md, craft/<preset>/
@@ -48,7 +49,7 @@ Scripts: `npm start` (server), `npm run dev` (server and Vite together, Vite pro
 - `PORT` comes from the environment (default `49321`). The server always binds `127.0.0.1`; there is
   no `HOST` setting. Never listen on anything but loopback.
 - `IMAGO_WEB_ROOT` is the built UI, `web/dist` by default, resolved against the package root.
-- `IMAGO_DATA_DIR` holds the projects (`projects/`), `series.json`, the concept sets (`concept-sets/`), the face pack (`faces/`) and the trash (`projects/.trash/`), `~/.local/share/imago` by default.
+- `IMAGO_DATA_DIR` holds the projects (`projects/`), `series.json`, the concept sets (`concept-sets/`), the face pack (`faces/`), the brands (`brands/`) and the trash (`projects/.trash/`), `~/.local/share/imago` by default.
 - `IMAGO_CLAUDE_BIN` is `claude` by default. Tests point it at `tests/fixtures/fake-claude.mjs`.
 - `IMAGO_MODEL` defaults to `claude-sonnet-5-5`. `IMAGO_EFFORT` defaults to `medium`.
 - `IMAGO_FACES_MODEL` defaults to `claude-haiku-5-5`: the model of the face pack's classification turn (always `--effort low`).
@@ -70,7 +71,7 @@ the title plus a short random suffix).
 project.json
 design.html             current design; what the preview shows
 assets/                 uploads, cutouts (safe leaf names only)
-reference/              style-reference.html: the series reference design (see Library); kit.json (see Fabula kits); never served
+reference/              style-reference.html: the series reference design (see Library); kit.json (see Fabula kits); brand.json (see Brands); never served
 reference/craft/        the preset's craft files, copied in by the server on every turn (see Thumbnail craft); never served
 versions/v<n>.html      snapshot taken at each render
 renders/v<n>.png        the render of that snapshot, at scale 1
@@ -91,7 +92,7 @@ exports/                files made by Export (JPGs, and the zips of platform cov
   "sessionId": null,
   "briefSent": false,
   "brief": { "free-form fields from the start form": "" },
-  "assets": [{ "name": "face.png", "kind": "upload|cutout|stock|reference|kit|face", "width": 0, "height": 0, "from": null }],
+  "assets": [{ "name": "face.png", "kind": "upload|cutout|stock|reference|kit|face|brand", "width": 0, "height": 0, "from": null }],
   "messages": [{ "role": "user|assistant", "text": "", "at": "ISO", "version": null, "mode": "standard|further", "model": "claude-..." }],
   "versions": [{ "n": 1, "at": "ISO", "warnings": [], "checks": [{ "id": "text.words", "level": "ok", "value": 3, "message": "3 words." }] }],
   "current": 1,
@@ -99,13 +100,16 @@ exports/                files made by Export (JPGs, and the zips of platform cov
   "series": null,
   "starred": false,
   "conceptSet": { "id": "set-3k9x", "index": 0, "archetype": "reaction", "label": "Shocked first look" },
-  "kit": { "id": "…", "title": "…", "project": "…", "createdAt": "ISO", "contactSheet": true }
+  "kit": { "id": "…", "title": "…", "project": "…", "createdAt": "ISO", "contactSheet": true },
+  "brand": { "id": "instrumenta-1a2b", "name": "Instrumenta" }
 }
 ```
 
 An asset of kind `face` is a pack face copied in (`face-<id>.png` or `face-<id>-mirrored.png`; it also carries `faceId` and `mirrored`); `syncAssets` recognises those names.
 
-`conceptSet` and `kit` exist only on projects made as one concept of a set, or from a Fabula kit (see "Fabula
+An asset of kind `brand` is a brand file copied in at creation (`brand-<name>`; it also carries `brandKind` logo|mascot|other and `note`). A kit face frame imported with face source `auto` carries `quality {grade, faceHeightPx, sharpness}`, the pack's own grade.
+
+`brand` exists only on projects made with one (see "Brands"); `conceptSet` and `kit` exist only on projects made as one concept of a set, or from a Fabula kit (see "Fabula
 kits" and "Concept sets"); `archetype` and `label` are null until the planner has run. A project without them is an
 ordinary one.
 
@@ -125,7 +129,7 @@ and `assets/`.
 
 | id | Default size | Brief fields |
 | --- | --- | --- |
-| `thumbnail` | by `brief.format`: `video` 16:9 1280×720 (default), `shorts` 9:16 720×1280, `podcast` 1:1 1280×1280 | `title` (the video's title or topic), `channelColours?`, `notes?`, `format?`; the brief may also carry `platforms?` (an array, kept only for `shorts`; see Thumbnail craft). `POST /api/projects` also takes `kit` (see Fabula kits) |
+| `thumbnail` | by `brief.format`: `video` 16:9 1280×720 (default), `shorts` 9:16 720×1280, `podcast` 1:1 1280×1280 | `title` (the video's title or topic), `channelColours?`, `notes?`, `format?`, `faceSource?` (see "Face source"); the brief may also carry `platforms?` (an array, kept only for `shorts`; see Thumbnail craft). `POST /api/projects` also takes `kit` (see Fabula kits) |
 | `photo` | the first uploaded photo's own size, or an aspect chosen from `original, 1:1, 4:5, 3:4, 2:3, 9:16, 4:3, 3:2, 16:9, 21:9` (long edge kept at most 2160) | `instruction` |
 | `graphic` | chosen from the grouped catalogue below, or custom (64–4096 each side) | `description` |
 
@@ -211,7 +215,15 @@ the google/fonts repository with their licences in `fonts/licenses/`: Archivo (v
 width 62-125, Fabula's display face), Montserrat (variable, heavy geometric), League Gothic (variable
 width, condensed), Lilita One (rounded), Bangers (comic), Bowlby One (fat soft poster), Permanent
 Marker (hand marker, Apache-2.0; the others are SIL OFL 1.1). A face with a width axis carries a
-`stretch` range in `fonts.json` and a `font-stretch` range in `fonts.css`. Only OFL or Apache-2.0
+`stretch` range in `fonts.json` and a `font-stretch` range in `fonts.css`.
+
+Brand v2's three faces are content fonts too (SIL OFL 1.1, the google/fonts variable TTFs with every axis, licences
+in `fonts/licenses/`): **Fraunces** (weight 100-900 plus `opsz` 9-144, `SOFT` 0-100 and `WONK` 0-1), **Commissioner**
+(weight 100-900, `slnt` -12-0, `FLAR` 0-100 and `VOLM` 0-100) and **Spline Sans Mono** (weight 300-700). A
+family's non-weight axes are listed under `axes` in `fonts.json` (`{tag: [min, max]}`), which is what brands validate
+`font-variation-settings` against; `fonts.css` declares the weight range (and Commissioner's oblique range), so
+`font-variation-settings: "SOFT" 100, "WONK" 1, "opsz" 144` works in a design. The tests render it: Fraunces 850 with those
+settings differs from the defaults, and so do Commissioner's `FLAR` and `VOLM`. Only OFL or Apache-2.0
 faces may be added.
 
 ## Fabula kits
@@ -358,6 +370,70 @@ cutting out, labelling), the pack-wide mirroring checkbox ("Mirroring: allowed f
 gaze plus starred and show hidden, a grid of cut-outs on a checker ground with the quality badge, star, hide and delete (with a six-second Undo), an edit dialog
 (labels, per-face mirroring, retry for failed or unclassified), Reclassify, and an empty state saying what to upload. The thumbnail start form shows "Your face pack: N faces,
 Claude picks." when the pack has ready faces.
+
+## Brands
+
+A brand is a reusable visual identity: fonts, a palette, signature devices, optional logo or mascot files and
+guidance. It constrains **type and colour**; layout, archetype, composition, imagery and cropping stay free. That is
+the difference from a series, whose style reference fixes the layout exactly. (`server/brands.mjs`.)
+
+**Data.** `<IMAGO_DATA_DIR>/brands/brands.json` is `{schemaVersion: 1, brands: [...]}`, written atomically and
+serialised; assets live in `<data>/brands/<id>/assets/`. A brand:
+`{id, name, description, colours [{name, hex, role}], fonts {display, support, mono?} (each {family, weight?, settings?}),
+devices [string], guidance, assets [{name, kind logo|mascot|other, note, width, height}], isDefault, createdAt, updatedAt}`.
+`id` is a slug plus four hex characters. Validation (`validateBrandFields`): name 1-60 characters and unique
+case-insensitively (409 `EXISTS`); 1 to 12 colours, `hex` `#RGB` or `#RRGGBB` (stored upper-case, 6 digits; 400 `BAD_HEX`), `role`
+one of `primary`, `accent`, `ink`, `light`, `extra` (`BAD_ROLE`); `display` and `support` required, `mono` optional,
+`family` must be in `fonts.json` (`UNKNOWN_FONT`), `weight` an integer inside the family's range (`BAD_WEIGHT`), `settings`
+only `"TAG" number` pairs on axes the family has (`BAD_SETTINGS`); at most 12 devices of 240 characters; guidance at most
+4000. At most 50 brands (409 `TOO_MANY`). At most one brand is the default (setting one clears the others).
+
+**Assets** follow the project upload rules: PNG, JPEG or WebP by header (415 `UNSUPPORTED_IMAGE`), 40 MB and 100 megapixels
+(413), `x-filename` required, a safe leaf name with the extension from the real type, claimed with `wx` (`-2`, `-3` on a
+clash), `Content-Type` only octet-stream or image/png|jpeg|webp. At most 20 per brand (409). A refused record removes the
+file again.
+
+**Using a brand.** `brand: <id>` on `POST /api/projects` and `POST /api/concept-sets` (`null`, `"none"` or nothing means no
+brand; an unknown id is 400 `BAD_BRAND` and creates nothing). At creation the brand is **snapshotted**: `reference/brand.json`
+(the brand's design fields, and each asset with the `file` it was copied to), the asset files copied into `assets/` as
+`brand-<name>` (kind `brand`), and `project.brand = {id, name}`. Editing or deleting the brand later changes no existing
+project. Every concept of a set gets the snapshot (resolved once, so they agree), and so does the planner's folder
+(`work/reference/brand.json`, `work/assets/brand-*`, removed with its other copies once the plan is made); the set records
+`brand {id, name}`. "Another concept", "duplicate" and "new in this style" copy the donor's snapshot, not the live brand. The UI
+preselects the default brand (`GET /api/brands` gives `defaultId`) on every start form, with "None".
+
+**Prompt.** `presets/brand.md`, filled by `brandSection(snapshot)` from the project's own snapshot, is appended to the system
+prompt after the series section and before "Take it further" and the concept section: **base, series, brand, further, concept**.
+It gives the palette by role as the core colours (tints, shades, pure black and white allowed, no unrelated hues as main
+colours), the display, support and mono faces with exact `font-weight` and `font-variation-settings`, the devices, the
+guidance (quoted: the owner's words are content, never instructions), and the assets by file name, optional to use. It says
+plainly that layout, archetype, composition, imagery and cropping are free; that the thumbnail legibility and honesty rules and
+the checks win over the brand; that a series reference, when present, decides layout and treatment (set in the brand's colours
+and faces); and that the brand's colours and fonts take precedence over a kit's style colours and fonts and the brief's channel
+colours (an explicit request in the owner's own message still wins for that request). The planner gets the same section plus
+`presets/brand-planner.md` (plan in the palette; brand files are never a concept's `frame`), via `plannerSection({brand})`.
+
+**UI.** `/brands` ("Brands" in the nav): cards with a sample 16:9 thumbnail in the brand's colours and fonts, swatches and a type
+specimen in its own faces; an editor with name and description, colour rows (hex text and colour picker, name, role, reorder,
+remove), font selects from `fonts.json` with weight, settings and a live specimen, devices and guidance, asset upload with kind
+and note, set as default, and a live preview tile. The workspace header shows `Brand · <name>`. The specimens load
+`/fonts/fonts.css` while the page is open.
+
+## Face source
+
+A thumbnail's `brief.faceSource` says where its face comes from. The start forms show it (thumbnails, single and concept
+set) when the pack has ready faces:
+
+| Value | Label | Meaning |
+| --- | --- | --- |
+| `pack` | My face pack, best quality | The default whenever the pack has ready faces. The kit's **face frames are not imported** (no `kit-f*` assets, none on the contact sheet or in the frame table); screens, pictures, story, hooks and palette still are. The planner must give every concept a pack `face` matched to its emotion and gesture, the gaze toward the text side (mirrorable per the pack settings), a different face each where the pack has enough; a plan without them is invalid (fallback). Design turns use the face placed in `assets/` and `use_face`. The fallback concepts use pack faces, even when the video has frames or the owner uploaded photos |
+| `video` | Frames from the video | Only offered with a kit; the previous behaviour (the default when the pack has no ready face) |
+| `auto` | Claude decides | Kit face frames are imported and **graded** with the pack's own function (`gradeOf`/`qualityOf`, sharpness measured on the face crop): the grade is on the kit contact sheet and in a `quality` column of the "From the video" frame table, and Claude picks the best face by fit and quality |
+
+`POST /api/projects` and `POST /api/concept-sets` take `brief.faceSource` (400 `BAD_FACE_SOURCE`; 400 `NO_PACK_FACES` for `pack` with
+no ready face); left out it is resolved as above. The first message carries a `Face source:` line (`FACE_SOURCE_LINES`). A pack
+face beside the video's own art and screens is honest; a pack face standing in for a specific moment, result or reaction the
+video did not capture is not (`kit.md`, `planner.md`, `concept.md`, `thumbnail.md` and `face-finishing.md` say so).
 
 ## Concept sets
 
@@ -553,7 +629,7 @@ status.
 | `GET /api/presets` | | `[{id, label, description, defaultSize, sizes, briefFields, chips: [string]}]` |
 | `GET /api/fonts` | | `fonts.json` content |
 | `GET /api/projects` | query: `query` (words, all must appear in the title or brief), `preset`, `series` (an id, or `none`), `starred=1`, `sort` (`edited` default, `newest`, `oldest`, `title`), `offset`, `limit` (default 40, at most 200) | `{items, total}`; an item is the compact card `{id, title, preset, size, series, starred, createdAt, updatedAt, versionCount, current, thumbnail: url\|null}` (no conversation) |
-| `POST /api/projects` | `{preset, title?, size?, brief, series?, kit?}` | `project` (does not start a turn); `series` must exist (400 `BAD_SERIES`); `kit` is a kit id from `GET /api/kits` (thumbnails only: 400 `BAD_KIT`, 404 `NO_SUCH_KIT`), and fills the blank brief fields |
+| `POST /api/projects` | `{preset, title?, size?, brief, series?, kit?, brand?}` | `project` (does not start a turn); `series` must exist (400 `BAD_SERIES`); `kit` is a kit id from `GET /api/kits` (thumbnails only: 400 `BAD_KIT`, 404 `NO_SUCH_KIT`), and fills the blank brief fields |
 | `GET /api/projects/:id` | | `project` |
 | `PATCH /api/projects/:id` | `{title?, starred?, series?: id\|null}` | `project`; does not change `updatedAt` (a rename is not an edit of the design); 400 `BAD_TITLE`, `BAD_STARRED`, `BAD_SERIES` |
 | `DELETE /api/projects/:id` | | `{ok: true}`; permanent (the UI uses the bulk delete below, which can be undone) |
@@ -573,8 +649,11 @@ status.
 | `POST /api/projects/:id/export` | `{format: "png"\|"jpg"\|"webp", scale: 1\|1.5\|2\|3 (longest output edge at most 8192)}` | `{name, url, width, height, bytes}` |
 | `POST /api/projects/:id/platform-export` | `{platforms?: ["youtube-shorts"\|"instagram-reels"\|"tiktok"]}` (default: the brief's platforms, else all three) | `{name, url, bytes, files: [{platform, name, width, height, bytes, quality, overBudget}]}`: one platform is a JPG, several a zip; 400 `NOT_SHORTS`, 409 `NO_RENDERS`, `TURN_RUNNING`; see Platform covers |
 | `GET /api/faces`, `POST /api/faces`, `PATCH|DELETE /api/faces/:id`, `POST /api/faces/:id/restore`, `POST /api/faces/:id/recut`, `POST /api/faces/reclassify`, `GET|PUT /api/faces/settings` | | the face pack; see "Face pack" |
+| `GET /api/brands`, `POST /api/brands`, `GET|PATCH|DELETE /api/brands/:id` | `{name, description?, colours, fonts, devices?, guidance?, isDefault?}` (PATCH: any of them) | `{items, defaultId}`; a brand view (assets carry a `url`); see "Brands" |
+| `POST /api/brands/:id/assets?kind=logo\|mascot\|other&note=` | raw image, `x-filename`, as for projects | 201 `{name, kind, note, width, height, url}` |
+| `PATCH|DELETE /api/brands/:id/assets/:name` | `{kind?, note?}` | the asset; `{ok: true}` |
 | `GET /api/kits` | | `{items: [kit summary], rejected: [{name, reason}]}`; see Fabula kits |
-| `POST /api/concept-sets` | `{title?, brief, kit?, count?: 2-4 (default 3)}` | 201 set view (state `draft`) and its N projects; 400 `BAD_COUNT`, `NEEDS_TITLE` |
+| `POST /api/concept-sets` | `{title?, brief, kit?, brand?, count?: 2-4 (default 3)}` | 201 set view (state `draft`) and its N projects; 400 `BAD_COUNT`, `NEEDS_TITLE` |
 | `POST /api/concept-sets/:id/assets` | raw image, `x-filename`, as for projects | `{name, width, height}`: the photo goes into every concept project and the planner's folder; only while `draft` (409 `NOT_DRAFT`) |
 | `POST /api/concept-sets/:id/start` | | 202 set view; plans and designs in the background; 409 `ALREADY_STARTED` |
 | `GET /api/concept-sets/:id` | | the set view |
@@ -621,6 +700,7 @@ The server also serves these files, with `Cache-Control: no-store` and `X-Conten
   into `project.assets`.
 - `/projects/:id/exports/*.zip` (platform covers), `/concept-sets/:id/exports/*.zip` (Test & Compare): `application/zip`, `Content-Disposition: attachment`, the same `sandbox` CSP.
 - `/faces/:id/original.<ext>`, `/faces/:id/cutout.png`, `/faces/:id/thumb.png` (the face pack; images only, never `face.json`), the same CSP.
+- `/brands/:id/assets/<file>`: only the image files that brand declares, image extensions only, the same CSP; 404 for anything else (a stray file, `brands.json`). `/brands` alone is the UI page.
 - `/kits/:kitId/frames/<file>` and `/kits/:kitId/pictures/<file>`: only the image files that kit's `kit.json` declares, image extensions only, the same CSP; 404 for anything else (kit.json included).
 - `/fonts/*` (with `Access-Control-Allow-Origin: *`, because the UI previews a design in a sandboxed,
   opaque-origin iframe whose font loads are cross-origin) and `web/dist`, with an SPA fallback to
@@ -654,7 +734,7 @@ It uses Fraunces for names and headings, Commissioner for the interface, and Spl
 sizes, versions and costs. It has dark and light themes, honours reduced motion and shows a
 visible focus.
 
-Routes: `/` (start: the three presets and the latest eight projects, "View all"), `/library`, `/faces` (the face pack),
+Routes: `/` (start: the three presets and the latest eight projects, "View all"), `/library`, `/faces` (the face pack), `/brands` (see Brands),
 `/new/<preset>` (`?style=<project id>` for "New in this style"), `/p/<id>`, `/c/<set id>` (the compare screen). The library searches by
 title and brief, filters by preset, series and starred, sorts four ways, loads 40 at a time, and has a
 "⋯" menu per card (also in the workspace header: Open, Rename, Star, Duplicate, New in this style,

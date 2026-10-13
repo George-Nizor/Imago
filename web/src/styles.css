@@ -488,3 +488,48 @@ input:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent); 
 .face-pack-note a { color: var(--accent-text); }
 .face-edit-form select, .face-edit-form input[type="text"] { font: 500 0.9rem var(--ui); color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-height: 40px; }
 .face-edit-form .field > span:first-child { font-weight: 600; font-size: 0.875rem; }
+
+/* ---- Brands ---- */
+.brands .lede { margin: 0; color: var(--muted); max-width: 64ch; }
+.brands .lib-head .spacer { flex: 1; }
+.brand-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; }
+.brand-card { display: flex; flex-direction: column; background: var(--raised); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.brand-card-body { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; }
+.brand-card-title { display: flex; align-items: center; gap: 10px; }
+.brand-card-title h2 { margin: 0; font-size: 1.5rem; line-height: 1.1; }
+.brand-card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.specimen { margin: 0; font-size: 1rem; }
+.specimen > span { font-size: 1.6rem; margin-right: 6px; }
+.specimen.live { font-size: 1.5rem; margin: 6px 0 2px; overflow-wrap: anywhere; }
+.swatches { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; flex-wrap: wrap; }
+.swatch { display: block; width: 28px; height: 28px; border-radius: 50%; border: 1px solid color-mix(in oklab, var(--text) 30%, transparent); }
+.brand-preview { position: relative; aspect-ratio: 16 / 9; overflow: hidden; container-type: inline-size; width: 100%; }
+.bp-blob { position: absolute; right: -8cqw; bottom: -14cqw; width: 52cqw; height: 52cqw; border-radius: 50%; }
+.bp-ring { position: absolute; right: 16cqw; top: 9cqw; width: 14cqw; height: 14cqw; border-radius: 50%; border: 1.6cqw solid; }
+.bp-text { position: absolute; left: 6cqw; top: 8cqw; right: 30cqw; display: flex; flex-direction: column; align-items: flex-start; gap: 2.2cqw; }
+.bp-tag { font-size: 3.4cqw; padding: 0.6cqw 2cqw; border-radius: 1.4cqw; letter-spacing: 0.04em; }
+.bp-title { font-size: 11cqw; line-height: 0.95; }
+.bp-sub { font-size: 3.6cqw; opacity: 0.9; }
+.bp-bar { display: block; width: 24cqw; height: 1.8cqw; border-radius: 1cqw; margin-top: 1cqw; }
+.brand-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 28px; align-items: start; }
+@media (max-width: 860px) { .brand-editor { grid-template-columns: 1fr; } }
+.brand-sticky { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 12px; }
+.colour-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.colour-row { display: grid; grid-template-columns: 40px 96px minmax(0, 1fr) 104px auto; gap: 8px; align-items: center; }
+.colour-row input[type="color"] { width: 40px; height: 36px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); cursor: pointer; }
+.colour-row .hex.bad { border-color: var(--danger); }
+.colour-actions { display: flex; gap: 2px; }
+.icon-btn.small { width: 30px; height: 30px; font-size: 0.9rem; }
+.font-row { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); margin-bottom: 8px; }
+.font-fields { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.font-fields .field { min-width: 160px; }
+.font-fields .field.narrow { width: 90px; min-width: 90px; }
+.font-fields .field.grow { flex: 1; min-width: 200px; }
+.brand-assets { display: flex; flex-direction: column; gap: 8px; }
+.asset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.asset-list li { display: flex; gap: 10px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); }
+.asset-list img { object-fit: contain; background: var(--stage); border-radius: 6px; flex: none; }
+.asset-meta { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.asset-add { display: flex; gap: 6px; flex-wrap: wrap; }
+.asset-add input[type="text"], .asset-add input:not([type]) { flex: 1; min-width: 120px; }
+.series-chip.brand-chip { margin-top: 0; }

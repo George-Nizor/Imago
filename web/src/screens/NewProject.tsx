@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/index.js";
-import { PLATFORM_LABELS, type CreateBody, type KitSummary, type PlatformId, type PresetId, type PresetInfo, type Project, type Size } from "../api/types.js";
+import { PLATFORM_LABELS, type Brand, type CreateBody, type KitSummary, type PlatformId, type PresetId, type PresetInfo, type Project, type Size } from "../api/types.js";
 import { canCreate, useCaps } from "../caps.js";
 import { Icon } from "../brand/Icon.js";
 import { Btn, CapabilityPanel, Dropzone, Spinner } from "../components.js";
@@ -58,6 +58,19 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
   }, [preset]);
   const kit = kits.find((k) => k.id === kitId);
   const [fromKit, setFromKit] = useState(false);
+  // Where the face comes from. The pack is the default whenever it has ready faces; "the video's frames" needs a kit.
+  const [faceSource, setFaceSource] = useState<"pack" | "video" | "auto">("pack");
+  const faceSourceNow = !fromKit && faceSource === "video" ? "pack" : faceSource;
+  // The brand: the default one is preselected until the owner chooses (including "None").
+  const [brands, setBrands] = useState<Brand[]>([]);
+  const [brandId, setBrandId] = useState("");
+  const brandTouched = useRef(false);
+  useEffect(() => {
+    api.listBrands().then((l) => {
+      setBrands(l.items);
+      if (!brandTouched.current) setBrandId(l.defaultId ?? "");
+    }).catch(() => {});
+  }, []);
   function pickKit(k: KitSummary | undefined) {
     setKitId(k?.id ?? "");
     if (!k) return;
@@ -116,7 +129,7 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
       let brief: Record<string, string | string[]> = {};
       let projectTitle = "";
       if (preset === "thumbnail") {
-        brief = { format, title: title.trim(), ...(colours.trim() && { channelColours: colours.trim() }), ...(notes.trim() && { notes: notes.trim() }), ...(format === "shorts" && platforms.length && { platforms }) };
+        brief = { format, title: title.trim(), ...(colours.trim() && { channelColours: colours.trim() }), ...(notes.trim() && { notes: notes.trim() }), ...(format === "shorts" && platforms.length && { platforms }), ...(packFaces > 0 && !styled && { faceSource: faceSourceNow }) };
         projectTitle = title.trim();
       } else if (preset === "photo") {
         brief = { instruction: instruction.trim(), aspect };
@@ -129,7 +142,7 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
       }
       if (asSet) {
         // Three concepts: the server makes the set and its projects, takes the photos for each, then plans.
-        createdSet.current ??= (await api.createConceptSet({ title: projectTitle, brief, count, ...(fromKit && kitId && { kit: kitId }) })).id;
+        createdSet.current ??= (await api.createConceptSet({ title: projectTitle, brief, count, brand: brandId || null, ...(fromKit && kitId && { kit: kitId }) })).id;
         const setId = createdSet.current;
         if (uploadsFirst) {
           next();
@@ -153,7 +166,7 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
         } else {
           let series: string | undefined = seriesChoice && seriesChoice !== "__new" ? seriesChoice : undefined;
           if (seriesChoice === "__new") series = createdSeries.current ??= (await api.createSeries(seriesName.trim())).id;
-          const body: CreateBody = { preset, title: projectTitle, brief, ...(size && { size }), ...(series && { series }), ...(fromKit && kitId && { kit: kitId }) };
+          const body: CreateBody = { preset, title: projectTitle, brief, brand: brandId || null, ...(size && { size }), ...(series && { series }), ...(fromKit && kitId && { kit: kitId }) };
           createdId.current = (await api.createProject(body)).id;
         }
       }
@@ -235,11 +248,20 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
         <fieldset disabled={busy} className="fields">
           {preset === "thumbnail" && (
             <>
-              {packFaces > 0 && (
-                <p className="face-pack-note">
-                  Your face pack: {packFaces} {packFaces === 1 ? "face" : "faces"}, Claude picks.{" "}
-                  <a href="/faces" onClick={(e) => { e.preventDefault(); navigate("/faces"); }}>Manage faces</a>
-                </p>
+              {packFaces > 0 && !styled && (
+                <div className="field">
+                  <span className="label">Face from <em>{packFaces} {packFaces === 1 ? "face" : "faces"} in your pack · <a href="/faces" onClick={(e) => { e.preventDefault(); navigate("/faces"); }}>manage</a></em></span>
+                  <div className="seg wrap" role="radiogroup" aria-label="Face source">
+                    <button type="button" role="radio" aria-checked={faceSourceNow === "pack"} className={faceSourceNow === "pack" ? "on" : ""} onClick={() => setFaceSource("pack")}>My face pack, best quality</button>
+                    {fromKit && <button type="button" role="radio" aria-checked={faceSourceNow === "video"} className={faceSourceNow === "video" ? "on" : ""} onClick={() => setFaceSource("video")}>Frames from the video</button>}
+                    <button type="button" role="radio" aria-checked={faceSourceNow === "auto"} className={faceSourceNow === "auto" ? "on" : ""} onClick={() => setFaceSource("auto")}>Claude decides</button>
+                  </div>
+                  <p className="muted small">
+                    {faceSourceNow === "pack" && "Claude picks the face whose expression, gesture and gaze fit, at the best quality. The video's own screens, pictures and colours are still used; its face frames are left out."}
+                    {faceSourceNow === "video" && "Faces come from the video's own frames."}
+                    {faceSourceNow === "auto" && "Claude weighs the video's face frames (graded 4k, hd or soft like your pack) against your pack and picks the best by fit and quality."}
+                  </p>
+                </div>
               )}
               {!styled && kits.length > 0 && (
                 <div className="field">
@@ -372,6 +394,16 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
                 <Dropzone files={files} onChange={setFiles} multiple busy={busy} status={fileNote} title="Drop references here" hint="a logo, a mood, a layout you like" />
               </div>
             </>
+          )}
+          {!styled && (
+            <label className="field">
+              <span className="label">Brand <em>fixes colours and fonts only; layout stays free</em></span>
+              <select aria-label="Brand" className="size-select" value={brandId} onChange={(e) => { brandTouched.current = true; setBrandId(e.target.value); }}>
+                <option value="">None</option>
+                {brands.map((b) => <option key={b.id} value={b.id}>{b.name}{b.isDefault ? " (default)" : ""}</option>)}
+              </select>
+              {brands.length === 0 && <span className="muted small">No brands yet. <a href="/brands" onClick={(e) => { e.preventDefault(); navigate("/brands"); }}>Make one</a></span>}
+            </label>
           )}
         </fieldset>
 

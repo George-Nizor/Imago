@@ -6,6 +6,7 @@ import { Header } from "./components.js";
 import { errorText, useRoute } from "./lib.js";
 import { ToastProvider } from "./library/ui.js";
 import { Compare } from "./screens/Compare.js";
+import { Brands } from "./screens/Brands.js";
 import { Faces } from "./screens/Faces.js";
 import { Library } from "./screens/Library.js";
 import { NewProject } from "./screens/NewProject.js";
@@ -43,6 +44,7 @@ export function App() {
           {route.name === "start" && <Start />}
           {route.name === "library" && <Library />}
           {route.name === "faces" && <Faces />}
+          {route.name === "brands" && <Brands />}
           {route.name === "new" && <NewProject key={`${route.preset}:${route.style ?? ""}`} preset={route.preset} style={route.style} />}
           {route.name === "project" && <Workspace key={route.id} id={route.id} />}
           {route.name === "compare" && <Compare key={route.id} id={route.id} />}

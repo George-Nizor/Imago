@@ -35,9 +35,11 @@ whether or not the pack has anything in it; an empty pack says so).
 - `use_face({id, mirror?})` puts the cut-out in `assets/` as `face-<id>.png` (or
   `face-<id>-mirrored.png`, really flipped), ready to place. Look at the result before relying on it.
 
-When to use it: the video has no better real frame of a person, or the concept names a pack face. A real
-frame from the video's own kit that fits the moment always wins over a pack face, because the thumbnail
-must not promise a moment the video does not have.
+When to use it: the face source is `pack` (the owner chose their pack's best quality; the video's face frames
+were not imported), the concept names a pack face, or the video has no better real frame of a person. With
+face source `video` or `auto`, a real frame from the video's own kit that fits the moment wins over a pack face
+when the thumbnail depends on that moment, because it must not promise one the video does not have. With
+`auto`, kit face frames have the pack's own grade (`4k`, `hd`, `soft`), so compare like with like.
 
 How to choose:
 
@@ -53,7 +55,9 @@ How to choose:
 4. Several concepts in a set use different faces. Do not reuse the face a sibling has.
 
 The same honesty rules apply as for any picture: a face from the pack is the owner, not the person in
-a moment of the video, so do not pair it with a caption or scene that claims it is that moment.
+a moment of the video, so do not pair it with a caption or scene that claims it is that moment. A pack
+face together with the video's own screens, pictures and art is honest; a pack face standing in for a
+specific moment, result or reaction the video did not capture is not.
 
 ## Lifting the face
 
