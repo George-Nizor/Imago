@@ -8,7 +8,8 @@ import path from "node:path";
 import { UploadError } from "./assets.mjs";
 import { runFacesClassifier } from "./claude-runner.mjs";
 import { cutOutFile as defaultCutOutFile } from "./cutout.mjs";
-import { LABEL_FIELDS, isFaceId, measureSharpness, qualityOf, readAllFaces, readSettings, validateLabels } from "./face-pack.mjs";
+import { LABEL_FIELDS, cleanStrength, isFaceId, measureSharpness, qualityOf, readAllFaces, readSettings, retouchOn, retouchStrengthFor, validStrength, validateLabels } from "./face-pack.mjs";
+import { DEFAULT_RETOUCH_STRENGTH, retouchFile as defaultRetouchFile } from "./face-retouch.mjs";
 import { renderFaceSheet } from "./face-sheet.mjs";
 import { EXTENSION, MAX_PIXELS, imageInfo, tooManyPixels } from "./image-info.mjs";
 import { sanitizeLeaf } from "./paths.mjs";
@@ -29,12 +30,13 @@ const TRASH_DAYS = 7;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const short = (text, max = 200) => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
-/** `ctx`: {config, cutOutFile?(source, destination) -> {width, height}, classify?({config, dir, count, signal}) -> {ok, costUsd, failure}}. */
+/** `ctx`: {config, cutOutFile?(source, destination) -> {width, height}, retouchFile?({cutout, destination, box, strength}) -> {width, height}, classify?({config, dir, count, signal}) -> {ok, costUsd, failure}}. */
 export function createFaces(ctx) {
   const { config } = ctx;
   const root = config.facesDir;
   const cutOutFile = ctx.cutOutFile ?? defaultCutOutFile;
   const classify = ctx.classify ?? runFacesClassifier;
+  const retouchFile = ctx.retouchFile ?? defaultRetouchFile;
   const dirOf = (id) => {
     if (!isFaceId(id)) throw new FaceError("BAD_ID", "Invalid face id.");
     return path.join(root, id);
@@ -43,7 +45,8 @@ export function createFaces(ctx) {
   const trashDir = path.join(root, ".trash");
   const queues = new Map();
   const cutQueue = [];
-  let cutting = null; // id being cut out
+  const retouchQueue = [];
+  let cutting = null; // id being cut out or retouched
   let classifying = new Set();
   let timer = null;
   let closed = false;
@@ -76,6 +79,9 @@ export function createFaces(ctx) {
     return run;
   }
 
+  const DEFAULT_SETTINGS = { mirrorAll: true, retouchAll: true, retouchStrength: DEFAULT_RETOUCH_STRENGTH };
+  const present = async (face) => view(face, await readSettings(path.dirname(root)));
+
   const stageOf = (face) => {
     const c = face.cutout?.state;
     if (c === "queued") return "queued";
@@ -87,9 +93,16 @@ export function createFaces(ctx) {
     return "ready";
   };
 
-  function view(face) {
+  function view(face, settings) {
+    return viewWith(face, settings ?? DEFAULT_SETTINGS);
+  }
+
+  function viewWith(face, settings = { mirrorAll: true, retouchAll: true, retouchStrength: DEFAULT_RETOUCH_STRENGTH }) {
     const base = `/faces/${face.id}`;
     const done = face.cutout?.state === "done";
+    const rt = face.retouched ?? {};
+    const retouchDone = rt.state === "done";
+    const version = rt.at ? `?v=${Date.parse(rt.at) || 0}` : "";
     return {
       id: face.id,
       addedAt: face.addedAt,
@@ -100,6 +113,18 @@ export function createFaces(ctx) {
       cutout: { state: face.cutout.state, width: face.cutout.width ?? null, height: face.cutout.height ?? null, url: done ? `${base}/cutout.png` : null, thumbUrl: done ? `${base}/${face.cutout.thumb ? "thumb.png" : "cutout.png"}` : null },
       labels: face.labels ?? null,
       labelsEditedByOwner: face.labelsEditedByOwner === true,
+      retouch: {
+        // enabled: what a design gets; override: the owner's choice for this face (null follows the pack).
+        enabled: retouchOn(face, settings),
+        override: face.retouch === true || face.retouch === false ? face.retouch : null,
+        strength: retouchStrengthFor(face, settings),
+        ownStrength: cleanStrength(face.retouchStrength),
+        state: rt.state ?? "none",
+        appliedStrength: retouchDone ? rt.strength ?? null : null,
+        error: rt.state === "failed" ? rt.error ?? "The retouch failed." : "",
+        url: retouchDone ? `${base}/retouched.png${version}` : null,
+        thumbUrl: retouchDone ? `${base}/${rt.thumb ? "retouched-thumb.png" : "retouched.png"}${version}` : null,
+      },
       mirrorAllowed: face.mirrorAllowed === true || face.mirrorAllowed === false ? face.mirrorAllowed : null,
       quality: face.quality ?? null,
       starred: face.starred === true,
@@ -116,21 +141,79 @@ export function createFaces(ctx) {
     void pumpCuts();
   }
 
+  /** Retouches go through the same one-at-a-time worker, ahead of the next cut-out so a new face finishes in one go. */
+  function enqueueRetouch(id) {
+    if (closed || retouchQueue.includes(id)) return;
+    retouchQueue.push(id);
+    void pumpCuts();
+  }
+
   async function pumpCuts() {
     if (cutting || closed) return;
-    const id = cutQueue.shift();
+    const retouchId = retouchQueue.shift();
+    const id = retouchId ?? cutQueue.shift();
     if (!id) {
       scheduleClassify();
       return;
     }
     cutting = id;
     try {
-      await cutJob(id);
+      if (retouchId) await retouchJob(id);
+      else await cutJob(id);
     } catch {
       // A face removed mid-job; nothing to record.
     } finally {
       cutting = null;
       void pumpCuts();
+    }
+  }
+
+  /** Does this face need a (new) retouch: on, cut out, and not yet done at this strength and this box? */
+  function needsRetouch(face, settings) {
+    if (!retouchOn(face, settings) || face.cutout?.state !== "done") return false;
+    const r = face.retouched;
+    if (!r || r.state === "failed" || r.state === "none") return true;
+    if (r.state === "queued" || r.state === "running") return true;
+    return r.strength !== retouchStrengthFor(face, settings) || (Boolean(face.labels?.faceBox) && r.box !== "labels");
+  }
+
+  /** Queues the retouch of a face when it needs one. Returns whether it did. */
+  async function ensureRetouched(id, { force = false } = {}) {
+    const face = await read(id).catch(() => null);
+    if (!face || face.retouch === false) return false;
+    const settings = await readSettings(path.dirname(root));
+    if (!force && !needsRetouch(face, settings)) return false;
+    if (face.cutout?.state !== "done") return false;
+    await mutate(id, (f) => void (f.retouched = { ...(f.retouched ?? {}), state: "queued" })).catch(() => {});
+    enqueueRetouch(id);
+    return true;
+  }
+
+  async function retouchJob(id) {
+    const face = await read(id);
+    if (face.cutout?.state !== "done") return;
+    const settings = await readSettings(path.dirname(root));
+    const strength = retouchStrengthFor(face, settings);
+    const dir = dirOf(id);
+    await mutate(id, (f) => void (f.retouched = { ...(f.retouched ?? {}), state: "running" }));
+    try {
+      const box = face.labels?.faceBox ?? null;
+      const tmp = path.join(dir, "retouched.tmp.png");
+      await retouchFile({ cutout: path.join(dir, "cutout.png"), destination: tmp, box, strength });
+      await fs.rename(tmp, path.join(dir, "retouched.png"));
+      let thumb = false;
+      try {
+        const sharp = (await import("sharp")).default;
+        await sharp(path.join(dir, "retouched.png"), { limitInputPixels: MAX_PIXELS }).resize({ height: THUMB_HEIGHT, fit: "inside", withoutEnlargement: true }).png().toFile(path.join(dir, "retouched-thumb.png"));
+        thumb = true;
+      } catch {
+        // Cards fall back to the full retouched image.
+      }
+      await mutate(id, (f) => void (f.retouched = { state: "done", strength, box: box ? "labels" : "fallback", at: new Date().toISOString(), thumb }));
+    } catch (error) {
+      await mutate(id, (f) => void (f.retouched = { state: "failed", error: short(error.message) || "The retouch failed.", at: new Date().toISOString() })).catch(() => {});
+    } finally {
+      await fs.rm(path.join(dir, "retouched.tmp.png"), { force: true }).catch(() => {});
     }
   }
 
@@ -161,7 +244,10 @@ export function createFaces(ctx) {
         f.cutout = { state: "done", width: made.width, height: made.height, thumb };
         // A recut face that was labelled before keeps its labels.
         if (!f.labels && f.classification?.state !== "pending") f.classification = { state: "pending" };
+        // A recut face's old retouch no longer matches the new cut-out.
+        if (f.retouched?.state === "done") f.retouched = { ...f.retouched, state: "none" };
       });
+      await ensureRetouched(id, {});
     } catch (error) {
       await mutate(id, (f) => {
         f.cutout = { state: "failed", error: short(error.message) || "The cut-out failed." };
@@ -175,7 +261,7 @@ export function createFaces(ctx) {
 
   // ---- classification: one Claude turn per batch --------------------------------------------------
 
-  const cutBusy = () => cutting !== null || cutQueue.length > 0;
+  const cutBusy = () => cutting !== null || cutQueue.length > 0 || retouchQueue.length > 0;
 
   function scheduleClassify() {
     if (closed) return;
@@ -290,6 +376,8 @@ export function createFaces(ctx) {
         f.classification = { state: "done", reason: "", at: new Date().toISOString() };
         f.quality = qualityOf({ faceBox: f.labels.faceBox, imageHeight: f.cutout?.height ?? f.original.height, sharpness });
       });
+      // The first retouch ran on a guessed box; now the real one is known.
+      await ensureRetouched(id);
     } catch {
       // Removed meanwhile.
     }
@@ -303,13 +391,15 @@ export function createFaces(ctx) {
 
     async list() {
       const faces = await readAllFaces(path.dirname(root));
-      const items = faces.sort((a, b) => String(b.addedAt).localeCompare(String(a.addedAt)) || b.id.localeCompare(a.id)).map(view);
-      const working = items.filter((f) => ["queued", "cutting", "classifying"].includes(f.stage)).length;
+      const settings = await readSettings(path.dirname(root));
+      const items = faces.sort((a, b) => String(b.addedAt).localeCompare(String(a.addedAt)) || b.id.localeCompare(a.id)).map((f) => view(f, settings));
+      const retouching = items.filter((f) => f.retouch.enabled && ["queued", "running"].includes(f.retouch.state)).length;
+      const working = items.filter((f) => ["queued", "cutting", "classifying"].includes(f.stage)).length + items.filter((f) => !["queued", "cutting", "classifying"].includes(f.stage) && f.retouch.enabled && ["queued", "running"].includes(f.retouch.state)).length;
       return {
         items,
-        counts: { total: items.length, ready: items.filter((f) => f.stage === "ready").length, hidden: items.filter((f) => f.hidden).length, working, unclassified: items.filter((f) => f.stage === "unclassified").length },
+        counts: { total: items.length, ready: items.filter((f) => f.stage === "ready").length, hidden: items.filter((f) => f.hidden).length, working, retouching, unclassified: items.filter((f) => f.stage === "unclassified").length },
         model: config.facesModel,
-        settings: await readSettings(path.dirname(root)),
+        settings,
         lastRun: activity.lastRun,
       };
     },
@@ -318,17 +408,34 @@ export function createFaces(ctx) {
       return readSettings(path.dirname(root));
     },
 
+    /** Any of `mirrorAll`, `retouchAll` (booleans) and `retouchStrength` (0 to 1); what is left out keeps its value. */
     async setSettings(body) {
-      if (typeof body.mirrorAll !== "boolean") throw new FaceError("BAD_FLAG", "mirrorAll must be true or false.");
+      const current = await readSettings(path.dirname(root));
+      const next = { ...current };
+      for (const key of ["mirrorAll", "retouchAll"]) {
+        if (body[key] === undefined) continue;
+        if (typeof body[key] !== "boolean") throw new FaceError("BAD_FLAG", `${key} must be true or false.`);
+        next[key] = body[key];
+      }
+      if (body.retouchStrength !== undefined) {
+        const strength = validStrength(body.retouchStrength);
+        if (strength === null) throw new FaceError("BAD_STRENGTH", "retouchStrength must be a number from 0 to 1.");
+        next.retouchStrength = strength;
+      }
+      if (body.mirrorAll === undefined && body.retouchAll === undefined && body.retouchStrength === undefined) throw new FaceError("BAD_FLAG", "Nothing to change: give mirrorAll, retouchAll or retouchStrength.");
       await fs.mkdir(root, { recursive: true });
       const tmp = path.join(root, `settings.${randomBytes(3).toString("hex")}.tmp`);
-      await fs.writeFile(tmp, `${JSON.stringify({ mirrorAll: body.mirrorAll })}\n`);
+      await fs.writeFile(tmp, `${JSON.stringify(next)}\n`);
       await fs.rename(tmp, path.join(root, "settings.json"));
-      return { mirrorAll: body.mirrorAll };
+      // Faces that follow the pack and have never been retouched (or not at this strength) are brought up to date.
+      if (next.retouchAll && (current.retouchAll !== next.retouchAll || current.retouchStrength !== next.retouchStrength)) {
+        for (const f of await readAllFaces(path.dirname(root))) if (f.retouch == null && f.retouchStrength == null) await ensureRetouched(f.id);
+      }
+      return next;
     },
 
     async get(id) {
-      return view(await read(id));
+      return present(await read(id));
     },
 
     /** Stores an upload (same type, size and megapixel rules as a project asset) and queues its cut-out. */
@@ -376,7 +483,7 @@ export function createFaces(ctx) {
       };
       await fs.writeFile(fileOf(id), `${JSON.stringify(face, null, 2)}\n`);
       enqueueCut(id);
-      return view(face);
+      return present(face);
     },
 
     /** Star, hide and the owner's label edits. Editing labels marks them as the owner's, which Reclassify then leaves alone. */
@@ -391,6 +498,15 @@ export function createFaces(ctx) {
       if (body.mirrorAllowed !== undefined) {
         if (body.mirrorAllowed !== null && typeof body.mirrorAllowed !== "boolean") throw new FaceError("BAD_FLAG", "mirrorAllowed must be true, false or null.");
         patch.mirrorAllowed = body.mirrorAllowed;
+      }
+      if (body.retouch !== undefined) {
+        if (body.retouch !== null && typeof body.retouch !== "boolean") throw new FaceError("BAD_FLAG", "retouch must be true, false or null.");
+        patch.retouch = body.retouch;
+      }
+      if (body.retouchStrength !== undefined) {
+        const strength = body.retouchStrength === null ? null : validStrength(body.retouchStrength);
+        if (body.retouchStrength !== null && strength === null) throw new FaceError("BAD_STRENGTH", "retouchStrength must be a number from 0 to 1, or null.");
+        patch.retouchStrength = strength;
       }
       let edits = null;
       if (body.labels !== undefined) {
@@ -413,7 +529,8 @@ export function createFaces(ctx) {
           if (f.cutout?.state === "done") f.classification = { state: "done", reason: "", at: new Date().toISOString() };
         }
       });
-      return view(next);
+      if (body.retouch !== undefined || body.retouchStrength !== undefined || edits) await ensureRetouched(id);
+      return present(next);
     },
 
     /** Delete is a move to .trash, so Undo is a move back; purged after a week. */
@@ -422,6 +539,8 @@ export function createFaces(ctx) {
       await fs.mkdir(trashDir, { recursive: true });
       const queued = cutQueue.indexOf(id);
       if (queued >= 0) cutQueue.splice(queued, 1);
+      const retouching = retouchQueue.indexOf(id);
+      if (retouching >= 0) retouchQueue.splice(retouching, 1);
       await fs.rm(path.join(trashDir, id), { recursive: true, force: true });
       await fs.rename(dirOf(id), path.join(trashDir, id));
       await fs.utimes(path.join(trashDir, id), new Date(), new Date()).catch(() => {});
@@ -435,7 +554,7 @@ export function createFaces(ctx) {
       await fs.rename(from, dirOf(id));
       const face = await read(id);
       if (["queued", "running"].includes(face.cutout?.state)) enqueueCut(id);
-      return view(face);
+      return present(face);
     },
 
     async purgeTrash() {
@@ -480,12 +599,29 @@ export function createFaces(ctx) {
       return api.get(id);
     },
 
+    /**
+     * Retouches these faces (all by default), again even when they have been. A face whose own choice is off is
+     * skipped; so is one that is not cut out yet. Runs in the background queue and returns at once.
+     */
+    async retouch(ids) {
+      const faces = await readAllFaces(path.dirname(root));
+      const wanted = Array.isArray(ids) ? faces.filter((f) => ids.includes(f.id)) : faces;
+      const changed = [];
+      const skipped = [];
+      for (const f of wanted.sort((a, b) => String(a.addedAt).localeCompare(String(b.addedAt)))) {
+        if (f.retouch === false || f.cutout?.state !== "done") skipped.push(f.id);
+        else if (await ensureRetouched(f.id, { force: true })) changed.push(f.id);
+        else skipped.push(f.id);
+      }
+      return { ok: true, changed, skipped };
+    },
+
     /** The file a /faces/<id>/<file> URL may serve, or null: the original, the cut-out and its thumbnail, nothing else. */
     async servable(id, file) {
       if (!isFaceId(id)) return null;
       const face = await read(id).catch(() => null);
       if (!face) return null;
-      const allowed = new Set([face.original.file, "cutout.png", "thumb.png"]);
+      const allowed = new Set([face.original.file, "cutout.png", "thumb.png", "retouched.png", "retouched-thumb.png"]);
       if (!allowed.has(file)) return null;
       return path.join(dirOf(id), file);
     },
@@ -497,7 +633,10 @@ export function createFaces(ctx) {
         if (["queued", "running"].includes(face.cutout?.state)) {
           await mutate(face.id, (f) => void (f.cutout = { state: "queued" })).catch(() => {});
           enqueueCut(face.id);
-        } else if (face.cutout?.state === "done" && ["pending", "running"].includes(face.classification?.state)) {
+        } else if (face.cutout?.state === "done" && ["queued", "running"].includes(face.retouched?.state)) {
+          await ensureRetouched(face.id, { force: true });
+        }
+        if (face.cutout?.state === "done" && ["pending", "running"].includes(face.classification?.state)) {
           await mutate(face.id, (f) => {
             f.classification = f.labels ? { state: "done", reason: "" } : { state: "unclassified", reason: "Imago was restarted before this was classified. Press Reclassify." };
           }).catch(() => {});

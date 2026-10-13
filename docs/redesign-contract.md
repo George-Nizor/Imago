@@ -29,6 +29,7 @@ Imago/
 │   ├── kits.mjs        Fabula thumbnail kits: discovery, strict validation, import, contact sheet, the "From the video" prompt section
 │   ├── concept-sets.mjs   concept sets: planner, parallel design turns, fallback, cancel, another concept
 │   ├── faces.mjs       the face pack: uploads, cut-out queue, classification batches (face.json is written only here)
+│   ├── face-retouch.mjs local retouching of a face cut-out (white balance, exposure, warmth, skin smoothing, redness, sharpen)
 │   ├── face-pack.mjs   the pack's vocabulary, label validation, quality grade, ranking, use_face; read by the server and the render MCP
 │   ├── brands.mjs      brands: validation, CRUD, assets, and the snapshot into a project or a concept set's planner folder (see Brands)
 │   ├── face-sheet.mjs  numbered contact sheets of face images (classifier batch, planner pack sheet, find_faces)
@@ -277,8 +278,10 @@ upload as sent), `cutout.png` (the existing local cut-out, made once at upload, 
 most 360 px tall, for grids and sheets) and `face.json`: `{schemaVersion, id, addedAt, filename, original {file, width,
 height, bytes} (sizes after EXIF orientation), cutout {state queued|running|done|failed, width, height, thumb, error},
 classification {state pending|running|done|unclassified, reason}, labels, labelsEditedByOwner, mirrorAllowed
-(true|false|null), quality {grade, faceHeightPx, sharpness}, starred, hidden}`. `faces/settings.json` is the pack setting
-`{mirrorAll}` (default true). Deleted faces move to `faces/.trash/<id>` (undo is a move back, purged after seven days).
+(true|false|null), quality {grade, faceHeightPx, sharpness}, starred, hidden, retouch (true|false|null), retouchStrength
+(0 to 1 or null), retouched {state queued|running|done|failed, strength, box labels|fallback, at, thumb, error}}`. Next to `cutout.png`
+the folder holds `retouched.png` and `retouched-thumb.png` once a retouch is done. `faces/settings.json` is the pack setting
+`{mirrorAll, retouchAll, retouchStrength}` (defaults true, true, 0.5; see Retouch). Deleted faces move to `faces/.trash/<id>` (undo is a move back, purged after seven days).
 Uploads follow the project asset rules (PNG, JPEG or WebP by header, 40 MB, 100 megapixels, `x-filename`, atomic
 creation; at most 300 faces, 409 `PACK_FULL`). The server is the only writer of `face.json`; the render MCP and the planner
 read it (`face-pack.mjs`).
@@ -287,6 +290,51 @@ read it (`face-pack.mjs`).
 cut out upright. A failed cut-out is reported (`stage: "failed"`, `POST /api/faces/:id/recut` retries). After a restart a
 cut-out that was running is queued again; a classification that was pending is marked unclassified ("Press Reclassify")
 rather than silently spending usage.
+
+**Retouch** (`face-retouch.mjs`; local, classic photo retouching with sharp and typed arrays; no model, no subscription). It
+makes `retouched.png` from the cut-out: the same size, the same alpha byte for byte, and never any reshaping, so tone and
+texture only. Each step is scaled by `strength` (0 to 1, default 0.5, chosen by looking at fifteen of the owner's own photos:
+at 0.5 the skin keeps its pores and the beard its texture, at 1 it starts to look pasted):
+
+1. *White balance*, measured on the skin inside `faceBox` (skin-coloured pixels in YCbCr, alpha 240 or more): the skin's R/G and
+   B/G are pulled toward a healthy band (R/G 1.14 to 1.40, B/G 0.74 to 0.90), never past its edge, gains held within 0.85 to 1.2
+   and luma preserved.
+2. *Exposure and levels*, one luma curve applied as a luma ratio so hue and saturation hold: the skin's median luma is brought
+   toward 0.5 by gamma (gamma 0.7 to 1.15, so a healthy face is left alone and a face over 0.72 eases down), lifted shadows are
+   weighted away from black (below luma 0.07 nothing moves, so a black T-shirt stays black), and a gentle sine S-curve of
+   contrast (0.16 x strength). Highlights keep their hue rather than clipping a channel.
+3. *Warmth and vibrance* on the mid-tones: R up and B down by up to 3.5%, capped so the skin's R/G never passes the band's top
+   plus 0.05 (never orange), and a saturation lift that favours weakly saturated colours.
+4. *Skin smoothing*, edge-preserving: a guided filter (guide: luma, radius 1.1% of the face height, eps 0.0025, two passes)
+   blended in by mask x strength x 0.55. The mask is built from `faceBox` (grown a little to take in neck and ears and
+   feathered), skin-colour likelihood, the alpha, minus anything dark relative to the face's skin (hair, brows, lashes, beard,
+   pupils, spread outward) and minus high-gradient pixels (eyes, lips, edges). Colour under the cut-out's soft rim is replaced
+   by the subject's own colour spread outward, so the rim does not darken.
+5. *Redness*: skin redder than its surroundings (R minus the mean of G and B, against a large local average) is reduced by
+   0.75 x strength in the mask, giving a quarter of it back to G and B so a spot does not turn into a dark patch.
+6. *Sharpening*: a luma unsharp mask over the whole subject (fine radius 0.07% of the height, 0.55 x strength, plus a wide
+   "clarity" term of 0.18 x strength), alpha-weighted so the outline does not halo, 40% gentler on skin and clamped to
+   +-0.09 per pixel.
+
+The cut-out's colours equal the photo's under the alpha (measured: a mean difference under 0.1 level), so the skin is measured
+on the cut-out. Cost: about 2.5 to 4.5 s per face of 3392 x 2544 on the dev machine. Without a face box the retouch guesses
+one from the cut-out (`fallbackBox`: the head at the top of the subject); the queue redoes it with the classifier's real box
+once the labels exist (`retouched.box` says which it used).
+
+*Settings.* Pack `retouchAll` (default on) and `retouchStrength` (default 0.5); per face `retouch` (`true`, `false`, or `null`
+to follow the pack) and `retouchStrength` (or `null`). The effective values: `retouchOn` and `retouchStrengthFor` in
+`face-pack.mjs`. `PUT /api/faces/settings` takes any of `mirrorAll`, `retouchAll`, `retouchStrength` (0 to 1) and keeps the rest;
+`PATCH /api/faces/:id` takes `retouch` and `retouchStrength`. A new upload is retouched right after its cut-out, in the same
+one-at-a-time background queue (a retouch is served before the next cut-out), and again when its labels arrive; changing a
+face's choice or strength, or the pack's `retouchAll` or strength for the faces that follow the pack, queues what is out of
+date. `POST /api/faces/retouch {ids?}` (202 `{ok, changed, skipped}`) retouches the named faces, or all, again at the effective
+strength; a face whose own choice is off, or that is not cut out yet, is skipped. A restart re-queues retouches that were
+running. The quality grade is always computed from the original photo, never from the retouch.
+
+*View.* Each face carries `retouch {enabled, override, strength, ownStrength, state none|queued|running|done|failed,
+appliedStrength, error, url, thumbUrl}` (the URLs end `?v=<time>` so a redo is not cached); the list's `counts` gain
+`retouching`, and `working` includes faces still being retouched. `/faces/<id>/retouched.png` and `retouched-thumb.png` are
+served under the same file rules as the other images.
 
 **Classification** (`runFacesClassifier`, prompt `presets/faces-classify.md`). One turn per batch: the faces whose cut-out
 is done and whose classification is pending, taken after the cut-out queue has been idle for `facesBatchMs` (2 s), at most
@@ -339,10 +387,10 @@ when the effective value is false (`mirrorAllowedFor`).
 - `find_faces({expression?, gesture?, gaze?, minGrade?, count?})` returns the best matches (`count` 4 by default, at most 8): usable
   faces only (cut out, classified, not hidden), ordered starred first, then grade, then 0.6 sharpness (capped at 200) plus 0.4
   recency. The result is a contact sheet image (numbered, with id, expression, gaze, grade) and JSON `{faces: [{n, id, expression,
-  intensity, gesture, gaze, headTurn, eyesOpen, textOrLogoInShot, mirrorSafe (the effective mirroring), grade, faceHeightPx, width,
+  intensity, gesture, gaze, headTurn, eyesOpen, textOrLogoInShot, mirrorSafe (the effective mirroring), retouched (use_face would give the retouched image), grade, faceHeightPx, width,
   height, starred, description}], packHas: {expression: count}, note?}`. The sheet is a help; without a renderer there is none.
-- `use_face({id, mirror?})` copies the cut-out to `assets/face-<id>.png`, or with `mirror` writes `assets/face-<id>-mirrored.png`
-  with the pixels flipped (sharp), and returns `{name, id, mirrored, width, height, grade, faceHeightPx}`. It refuses a hidden or not
+- `use_face({id, mirror?})` copies the face image (`retouched.png` when the effective retouch is on and done, else `cutout.png`; the description tells Claude pack faces arrive retouched and must not get heavy CSS filters) to `assets/face-<id>.png`, or with `mirror` writes `assets/face-<id>-mirrored.png`
+  with the pixels flipped (sharp), and returns `{name, id, mirrored, width, height, grade, faceHeightPx, retouched}`. It refuses a hidden or not
   ready face and a mirror that is not allowed. The server then syncs assets (kind `face`).
 
 **Planner and concept sets.** When the pack has usable faces, the planning folder gets `faces/sheet.png` (starred first, then

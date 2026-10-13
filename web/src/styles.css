@@ -481,6 +481,21 @@ input:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent); 
 .face-edit-pic img { width: 100%; border-radius: 10px; background: var(--stage); }
 .face-edit-form { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .face-edit-form select, .face-edit-form input[type="text"] { width: 100%; }
+.faces-retouch { display: flex; flex-direction: column; gap: 10px; }
+.faces-retouch-row { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; padding: 0 4px; }
+.strength { flex: 1; min-width: 200px; max-width: 360px; }
+.strength input[type="range"], .compare input[type="range"] { accent-color: var(--accent); width: 100%; min-height: 28px; }
+.face-retouch-edit { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.face-retouch-edit legend { padding: 0 6px; font-weight: 600; font-size: 0.875rem; }
+.face-retouch-reset { align-self: flex-start; min-height: 32px; padding: 4px 10px; font-size: 0.8125rem; }
+.compare { position: relative; border-radius: 10px; overflow: hidden; background: var(--stage); line-height: 0; }
+.compare img { width: 100%; display: block; }
+.compare .compare-after { position: absolute; inset: 0; height: 100%; object-fit: contain; border-radius: 0; }
+.compare-line { position: absolute; top: 0; bottom: 28px; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; }
+.compare input[type="range"] { position: relative; display: block; margin: 0; }
+.compare-tag { position: absolute; top: 8px; padding: 2px 8px; border-radius: 6px; font: 600 0.75rem var(--ui); line-height: 1.4; background: var(--bg); border: 1px solid var(--line); pointer-events: none; }
+.compare-tag.is-before { left: 8px; }
+.compare-tag.is-after { right: 8px; color: var(--accent-text); }
 .dialog-actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; }
 @media (max-width: 640px) { .face-edit { grid-template-columns: 1fr; } }
 .dialog:has(.face-edit) { width: min(720px, 100%); }

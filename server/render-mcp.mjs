@@ -12,7 +12,7 @@ import { highestVersion, validateDesignFile } from "./design-files.mjs";
 import { stageFeed } from "./feed.mjs";
 import { renderHtml } from "./renderer.mjs";
 import { fetchStockImage, searchImages } from "./stock.mjs";
-import { EXPRESSIONS, GAZES, GESTURES, GRADES, availability, facesRoot, rankFaces, readAllFaces, readSettings, summarize, takeFace } from "./face-pack.mjs";
+import { EXPRESSIONS, GAZES, GESTURES, GRADES, availability, faceImageFile, facesRoot, rankFaces, readAllFaces, readSettings, summarize, takeFace } from "./face-pack.mjs";
 import { renderFaceSheet } from "./face-sheet.mjs";
 import os from "node:os";
 
@@ -123,7 +123,7 @@ server.registerTool(
 server.registerTool(
   "find_faces",
   {
-    description: "Look through the owner's face pack (their own photos, already cut out and labelled) for the best faces for this design. Returns the best matches, starred first, with their labels and quality grade, and a numbered contact sheet image of them. Gaze is in image terms: 'left' means the face looks toward the left edge. Then use_face the one you want.",
+    description: "Look through the owner's face pack (their own photos, already cut out, labelled and retouched) for the best faces for this design. Returns the best matches, starred first, with their labels and quality grade, and a numbered contact sheet image of them. Gaze is in image terms: 'left' means the face looks toward the left edge. Then use_face the one you want.",
     inputSchema: {
       expression: z.enum(EXPRESSIONS).optional(),
       gesture: z.enum(GESTURES).optional(),
@@ -148,7 +148,7 @@ server.registerTool(
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "imago-find-faces-"));
       try {
         const out = path.join(dir, "sheet.png");
-        const items = found.map((f) => ({ file: path.join(facesRoot(dataDir), f.id, f.cutout.thumb ? "thumb.png" : "cutout.png"), label: `${f.id}`, caption: `${f.labels.expression} ${f.labels.intensity} · ${f.labels.gaze} · ${f.quality?.grade ?? "?"}${f.starred ? " · starred" : ""}` }));
+        const items = found.map((f) => ({ file: path.join(facesRoot(dataDir), f.id, faceImageFile(f, settings) === "retouched.png" && f.retouched.thumb ? "retouched-thumb.png" : f.cutout.thumb ? "thumb.png" : "cutout.png"), label: `${f.id}`, caption: `${f.labels.expression} ${f.labels.intensity} · ${f.labels.gaze} · ${f.quality?.grade ?? "?"}${f.starred ? " · starred" : ""}` }));
         if (await renderFaceSheet(config, items, { out, columns: Math.min(4, items.length), cell: 300, title: "Your face pack: best matches" })) content.push({ type: "image", data: (await fs.readFile(out)).toString("base64"), mimeType: "image/png" });
       } finally {
         await fs.rm(dir, { recursive: true, force: true });
@@ -163,7 +163,7 @@ server.registerTool(
 server.registerTool(
   "use_face",
   {
-    description: "Copy a face from the owner's face pack into assets/ as face-<id>.png (a transparent cut-out, ready to place) or, with mirror, as face-<id>-mirrored.png with the pixels flipped. Refused when mirroring is not allowed for that face. Returns the name and size.",
+    description: "Copy a face from the owner's face pack into assets/ as face-<id>.png (a transparent cut-out, ready to place; it arrives already retouched: balanced, brightened, skin smoothed and sharpened, so do not stack heavy CSS filters on it, only light grading to match the scene) or, with mirror, as face-<id>-mirrored.png with the pixels flipped. Refused when mirroring is not allowed for that face. Returns the name and size.",
     inputSchema: {
       id: z.string().describe("A face id from find_faces"),
       mirror: z.boolean().optional().describe("Flip it left to right so it looks toward the other side"),

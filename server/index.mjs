@@ -520,6 +520,12 @@ export function createServer(config = loadConfig(), deps = {}) {
       if (body.ids !== undefined && !(Array.isArray(body.ids) && body.ids.length <= 500 && body.ids.every(isFaceId))) throw new HttpError(400, "BAD_IDS", "ids must be a list of face ids.");
       return sendJson(res, 200, await faces.reclassify(body.ids));
     }
+    if (b === "retouch") {
+      if (method !== "POST") throw new HttpError(405, "METHOD", "Method not allowed.");
+      const body = await readJson(req);
+      if (body.ids !== undefined && !(Array.isArray(body.ids) && body.ids.length <= 500 && body.ids.every(isFaceId))) throw new HttpError(400, "BAD_IDS", "ids must be a list of face ids.");
+      return sendJson(res, 202, await faces.retouch(body.ids));
+    }
     if (!isFaceId(b)) throw new HttpError(400, "BAD_ID", "Invalid face id.");
     if (!c) {
       if (method === "GET") return sendJson(res, 200, await faces.get(b));

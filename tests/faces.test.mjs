@@ -372,9 +372,9 @@ test("use_face copies or really mirrors the cut-out; mirroring follows the owner
 test("the owner's mirroring setting and per-face choice go through the API", async () => {
   const { t, upload, list, settled } = await setup();
   try {
-    assert.deepEqual((await t.api("GET", "/api/faces/settings")).body, { mirrorAll: true });
+    assert.deepEqual((await t.api("GET", "/api/faces/settings")).body, { mirrorAll: true, retouchAll: true, retouchStrength: 0.5 });
     assert.equal((await t.api("PUT", "/api/faces/settings", { mirrorAll: "no" })).status, 400);
-    assert.deepEqual((await t.api("PUT", "/api/faces/settings", { mirrorAll: false })).body, { mirrorAll: false });
+    assert.deepEqual((await t.api("PUT", "/api/faces/settings", { mirrorAll: false })).body, { mirrorAll: false, retouchAll: true, retouchStrength: 0.5 });
     assert.equal((await list()).settings.mirrorAll, false);
     await upload("p.png", makePng(32, 32), "image/png");
     const [face] = (await until(list, settled)).items;

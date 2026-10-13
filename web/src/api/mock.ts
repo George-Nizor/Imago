@@ -18,6 +18,7 @@ import type {
   FaceLabels,
   FaceList,
   FacePatch,
+  FaceSettings,
   FaceView,
   KitSummary,
   PlatformId,
@@ -714,7 +715,7 @@ export const mockApi: Api = {
       id, addedAt: new Date().toISOString(), filename: file.name, stage: "queued", error: "",
       original: { width: dims?.width ?? 1600, height: dims?.height ?? 1200, url: "" },
       cutout: { state: "queued", width: null, height: null, url: null, thumbUrl: null },
-      labels: null, labelsEditedByOwner: false, mirrorAllowed: null, quality: null, starred: false, hidden: false,
+      labels: null, labelsEditedByOwner: false, mirrorAllowed: null, quality: null, starred: false, hidden: false, retouch: noRetouch(),
     };
     faces.unshift(f);
     advanceFace(f);
@@ -725,6 +726,9 @@ export const mockApi: Api = {
     if (patch.starred !== undefined) f.starred = patch.starred;
     if (patch.hidden !== undefined) f.hidden = patch.hidden;
     if (patch.mirrorAllowed !== undefined) f.mirrorAllowed = patch.mirrorAllowed;
+    if (patch.retouch !== undefined) f.retouch.override = patch.retouch;
+    if (patch.retouchStrength !== undefined) f.retouch.ownStrength = patch.retouchStrength;
+    if (patch.retouch !== undefined || patch.retouchStrength !== undefined) startRetouch(f);
     if (patch.labels) {
       f.labels = { ...(f.labels ?? sampleLabels(0)), ...patch.labels };
       f.labelsEditedByOwner = true;
@@ -766,8 +770,21 @@ export const mockApi: Api = {
     return structuredClone(f);
   },
   async setFaceSettings(settings) {
-    faceSettings = settings;
-    return settings;
+    faceSettings = { ...faceSettings, ...settings };
+    return faceSettings;
+  },
+  async retouchFaces(ids) {
+    const changed: string[] = [];
+    const skipped: string[] = [];
+    for (const f of faces) {
+      if (ids && !ids.includes(f.id)) continue;
+      if (f.retouch.override === false || f.cutout.state !== "done") skipped.push(f.id);
+      else {
+        startRetouch(f, true);
+        changed.push(f.id);
+      }
+    }
+    return { changed, skipped };
   },
   feedUrl: () => "",
   renderUrl: (id, n) => projects.get(id)?.renders[n] ?? "",
@@ -794,7 +811,7 @@ function photoSize(source: Size, aspect: string): Size {
 
 // ---- the face pack (stand-in): a few drawn faces, and uploads that walk through cutting out and classifying ----
 let faceCounter = 100;
-let faceSettings = { mirrorAll: true };
+let faceSettings: FaceSettings = { mirrorAll: true, retouchAll: true, retouchStrength: 0.5 };
 const trashed = new Map<string, FaceView>();
 const needFace = (id: string) => {
   const f = faces.find((x) => x.id === id);
@@ -813,9 +830,9 @@ const MOUTHS: Record<string, string> = {
   excited: "M58 106 Q80 138 102 106 Z", thinking: "M68 116 L92 112", sceptical: "M64 116 Q80 108 96 116", confused: "M64 116 Q72 108 80 116 T96 116",
   intense: "M64 114 L96 114", angry: "M64 120 Q80 106 96 120", sad: "M64 120 Q80 106 96 120", neutral: "M66 115 L94 115",
 };
-function faceArt(n: number, expression: string): string {
+function faceArt(n: number, expression: string, retouched = false): string {
   const hue = (n * 47) % 360;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="200" viewBox="0 0 160 200"><path d="M10 200 Q10 150 80 148 Q150 150 150 200Z" fill="hsl(${hue} 45% 38%)"/><ellipse cx="80" cy="82" rx="46" ry="56" fill="hsl(28 55% 72%)"/><path d="M34 72 Q40 22 80 24 Q122 22 126 72 Q110 44 80 46 Q52 44 34 72Z" fill="hsl(25 35% 22%)"/><circle cx="62" cy="82" r="${expression === "shock" || expression === "surprise" ? 7 : 5}" fill="#1b1b1b"/><circle cx="98" cy="82" r="${expression === "shock" || expression === "surprise" ? 7 : 5}" fill="#1b1b1b"/><path d="${MOUTHS[expression] ?? MOUTHS.neutral}" fill="${expression === "laugh" || expression === "excited" ? "#7a1f2b" : "none"}" stroke="#7a1f2b" stroke-width="4" stroke-linecap="round"/></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="200" viewBox="0 0 160 200"><path d="M10 200 Q10 150 80 148 Q150 150 150 200Z" fill="hsl(${hue} 45% 38%)"/><ellipse cx="80" cy="82" rx="46" ry="56" fill="${retouched ? "hsl(26 50% 78%)" : "hsl(10 60% 62%)"}"/><path d="M34 72 Q40 22 80 24 Q122 22 126 72 Q110 44 80 46 Q52 44 34 72Z" fill="hsl(25 35% 22%)"/><circle cx="62" cy="82" r="${expression === "shock" || expression === "surprise" ? 7 : 5}" fill="#1b1b1b"/><circle cx="98" cy="82" r="${expression === "shock" || expression === "surprise" ? 7 : 5}" fill="#1b1b1b"/><path d="${MOUTHS[expression] ?? MOUTHS.neutral}" fill="${expression === "laugh" || expression === "excited" ? "#7a1f2b" : "none"}" stroke="#7a1f2b" stroke-width="4" stroke-linecap="round"/></svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 function seedFace(n: number, over: Partial<FaceView> = {}): FaceView {
@@ -825,8 +842,23 @@ function seedFace(n: number, over: Partial<FaceView> = {}): FaceView {
   return {
     id: (n + 1).toString(16).padStart(8, "0"), addedAt: new Date(Date.now() - n * 3_600_000).toISOString(), filename: `me-${n + 1}.jpg`, stage: "ready", error: "",
     original: { width: 4000, height: 3000, url: art }, cutout: { state: "done", width: 4000, height: 3000, url: art, thumbUrl: art },
-    labels, labelsEditedByOwner: false, mirrorAllowed: null, quality: { grade, faceHeightPx: [1500, 800, 380][n % 3]!, sharpness: 120 }, starred: n === 0 || n === 4, hidden: false, ...over,
+    labels, labelsEditedByOwner: false, mirrorAllowed: null, quality: { grade, faceHeightPx: [1500, 800, 380][n % 3]!, sharpness: 120 }, starred: n === 0 || n === 4, hidden: false,
+    retouch: { ...noRetouch(), state: "done", appliedStrength: 0.5, url: faceArt(n, labels.expression, true), thumbUrl: faceArt(n, labels.expression, true) }, ...over,
   };
+}
+const noRetouch = (): FaceView["retouch"] => ({ enabled: true, override: null, strength: 0.5, ownStrength: null, state: "none", appliedStrength: null, error: "", url: null, thumbUrl: null });
+/** A retouch takes a moment; the drawn faces get a lighter skin tone once it is done. */
+function startRetouch(f: FaceView, force = false) {
+  const wanted = f.retouch.override ?? faceSettings.retouchAll;
+  const strength = f.retouch.ownStrength ?? faceSettings.retouchStrength;
+  if (!wanted || f.cutout.state !== "done" || (!force && f.retouch.state === "done" && f.retouch.appliedStrength === strength)) return;
+  f.retouch.state = "queued";
+  setTimeout(() => (f.retouch.state = "running"), 200);
+  setTimeout(() => {
+    const n = Number.parseInt(f.id, 16);
+    const art = faceArt(n, f.labels?.expression ?? sampleLabels(n).expression, true);
+    f.retouch = { ...f.retouch, state: "done", appliedStrength: f.retouch.ownStrength ?? faceSettings.retouchStrength, url: art, thumbUrl: art };
+  }, 1400);
 }
 const faces: FaceView[] = [
   ...Array.from({ length: 12 }, (_, n) => seedFace(n)),
@@ -835,9 +867,14 @@ const faces: FaceView[] = [
 ];
 function faceList(): FaceList {
   const items = structuredClone(faces);
+  for (const f of items) {
+    f.retouch.enabled = f.retouch.override ?? faceSettings.retouchAll;
+    f.retouch.strength = f.retouch.ownStrength ?? faceSettings.retouchStrength;
+  }
+  const retouching = items.filter((f) => f.retouch.enabled && ["queued", "running"].includes(f.retouch.state)).length;
   return {
     items,
-    counts: { total: items.length, ready: items.filter((f) => f.stage === "ready").length, hidden: items.filter((f) => f.hidden).length, working: items.filter((f) => ["queued", "cutting", "classifying"].includes(f.stage)).length, unclassified: items.filter((f) => f.stage === "unclassified").length },
+    counts: { total: items.length, ready: items.filter((f) => f.stage === "ready").length, hidden: items.filter((f) => f.hidden).length, working: items.filter((f) => ["queued", "cutting", "classifying"].includes(f.stage)).length + retouching, retouching, unclassified: items.filter((f) => f.stage === "unclassified").length },
     model: "claude-haiku-5-5",
     settings: faceSettings,
   };
@@ -867,6 +904,7 @@ function advanceFace(f: FaceView) {
     f.cutout = { state: "done", width: f.original.width, height: f.original.height, url: art, thumbUrl: art };
     f.original.url = art;
     f.stage = "classifying";
+    startRetouch(f);
   }, 2200 / speed);
   setTimeout(() => finishClassify(f, "ok"), 4200 / speed);
 }

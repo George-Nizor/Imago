@@ -401,17 +401,43 @@ export interface FaceView {
   quality: { grade: "4k" | "hd" | "soft"; faceHeightPx: number; sharpness: number | null } | null;
   starred: boolean;
   hidden: boolean;
+  retouch: FaceRetouch;
+}
+/** Local photo retouching of the cut-out (tone and texture only). `url` and `thumbUrl` exist once it is done. */
+export interface FaceRetouch {
+  /** What designs get: the retouched image (true) or the plain cut-out. */
+  enabled: boolean;
+  /** The owner's choice for this face; null follows the pack setting. */
+  override: boolean | null;
+  /** The strength in force (this face's own, else the pack's), 0 to 1. */
+  strength: number;
+  ownStrength: number | null;
+  state: "none" | "queued" | "running" | "done" | "failed";
+  /** The strength the file on disk was made at; differs from `strength` until it is redone. */
+  appliedStrength: number | null;
+  error: string;
+  url: string | null;
+  thumbUrl: string | null;
+}
+export interface FaceSettings {
+  mirrorAll: boolean;
+  retouchAll: boolean;
+  retouchStrength: number;
 }
 export interface FaceList {
   items: FaceView[];
-  counts: { total: number; ready: number; hidden: number; working: number; unclassified: number };
+  counts: { total: number; ready: number; hidden: number; working: number; retouching: number; unclassified: number };
   model: string;
-  settings: { mirrorAll: boolean };
+  settings: FaceSettings;
 }
 export interface FacePatch {
   starred?: boolean;
   hidden?: boolean;
   mirrorAllowed?: boolean | null;
+  /** true or false is the owner's choice for this face; null follows the pack. */
+  retouch?: boolean | null;
+  /** 0 to 1; null follows the pack's strength. */
+  retouchStrength?: number | null;
   labels?: Partial<Omit<FaceLabels, "faceBox">>;
 }
 
@@ -476,5 +502,8 @@ export interface Api {
   /** Asks Claude again for these faces (all by default); faces with the owner's labels come back as skipped. */
   reclassifyFaces(ids?: string[]): Promise<{ changed: string[]; skipped: string[] }>;
   recutFace(id: string): Promise<FaceView>;
-  setFaceSettings(settings: { mirrorAll: boolean }): Promise<{ mirrorAll: boolean }>;
+  /** Any of the pack settings; what is left out keeps its value. */
+  setFaceSettings(settings: Partial<FaceSettings>): Promise<FaceSettings>;
+  /** Retouches these faces again (all by default); a face switched off comes back as skipped. Runs in the background. */
+  retouchFaces(ids?: string[]): Promise<{ changed: string[]; skipped: string[] }>;
 }

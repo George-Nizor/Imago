@@ -3,6 +3,7 @@
 // which runs in its own process and reads <IMAGO_DATA_DIR>/faces/<id>/ directly. Never writes face.json.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_RETOUCH_STRENGTH } from "./face-retouch.mjs";
 import { ID_PATTERN } from "./paths.mjs";
 
 export const EXPRESSIONS = ["smile", "laugh", "surprise", "shock", "excited", "thinking", "sceptical", "confused", "intense", "angry", "sad", "neutral"];
@@ -149,15 +150,37 @@ export async function readAllFaces(dataDir) {
   return faces.filter(Boolean);
 }
 
-/** Pack-wide settings (<faces>/settings.json): `mirrorAll` (default true) lets every face be mirrored unless the owner says otherwise. */
+const strengthOf = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, Math.round(v * 100) / 100)) : null);
+
+/**
+ * Pack-wide settings (<faces>/settings.json): `mirrorAll` (default true) lets every face be mirrored unless the
+ * owner says otherwise; `retouchAll` (default true) retouches every face unless the owner says otherwise, at
+ * `retouchStrength` (0 to 1).
+ */
 export async function readSettings(dataDir) {
   try {
     const raw = JSON.parse(await fs.readFile(path.join(facesRoot(dataDir), "settings.json"), "utf8"));
-    return { mirrorAll: raw?.mirrorAll !== false };
+    return { mirrorAll: raw?.mirrorAll !== false, retouchAll: raw?.retouchAll !== false, retouchStrength: strengthOf(raw?.retouchStrength) ?? DEFAULT_RETOUCH_STRENGTH };
   } catch {
-    return { mirrorAll: true };
+    return { mirrorAll: true, retouchAll: true, retouchStrength: DEFAULT_RETOUCH_STRENGTH };
   }
 }
+
+export const cleanStrength = strengthOf;
+/** A strength from the API: exactly 0 to 1, else null (cleanStrength would clamp it). */
+export const validStrength = (v) => (typeof v === "number" && v >= 0 && v <= 1 ? strengthOf(v) : null);
+
+/** Is this face retouched? The owner's per-face choice (`retouch` true or false) wins; null follows the pack's `retouchAll`. */
+export function retouchOn(face, settings = { retouchAll: true }) {
+  if (face.retouch === true || face.retouch === false) return face.retouch;
+  return settings.retouchAll !== false;
+}
+
+/** The strength a face is retouched at: its own, else the pack's. */
+export const retouchStrengthFor = (face, settings = {}) => strengthOf(face.retouchStrength) ?? strengthOf(settings.retouchStrength) ?? DEFAULT_RETOUCH_STRENGTH;
+
+/** The image file a design gets for this face: retouched.png when retouching is on and done, else the plain cut-out. */
+export const faceImageFile = (face, settings) => (retouchOn(face, settings) && face.retouched?.state === "done" ? "retouched.png" : "cutout.png");
 
 /**
  * May this face be mirrored? The owner's per-face choice (`mirrorAllowed` true or false) wins. With none
@@ -185,6 +208,7 @@ export function summarize(face, settings = { mirrorAll: true }) {
     eyesOpen: l.eyesOpen ?? null,
     textOrLogoInShot: l.textOrLogoInShot ?? null,
     mirrorSafe: mirrorAllowedFor(face, settings),
+    retouched: faceImageFile(face, settings) === "retouched.png",
     grade: face.quality?.grade ?? null,
     faceHeightPx: face.quality?.faceHeightPx ?? null,
     width: face.cutout?.width ?? null,
@@ -241,7 +265,7 @@ export const faceAssetName = (id, mirrored = false) => `face-${id}${mirrored ? "
 export const FACE_ASSET = /^face-([a-f0-9]{8})(-mirrored)?\.png$/;
 
 /**
- * Copies a face's cut-out into `<projectDir>/assets/` as face-<id>.png, or as face-<id>-mirrored.png with
+ * Copies a face's cut-out (its retouched version when retouching is on) into `<projectDir>/assets/` as face-<id>.png, or as face-<id>-mirrored.png with
  * the pixels really flipped. Returns {name, width, height, id, mirrored, grade}. Refuses a mirror when the
  * shot has text or a logo in it, and any face the owner hid or that is not ready.
  */
@@ -250,10 +274,11 @@ export async function takeFace(dataDir, projectDir, id, { mirror = false } = {})
   if (!face) throw new Error(`There is no face ${JSON.stringify(String(id).slice(0, 20))} in the pack.`);
   if (face.hidden) throw new Error("The owner hid this face; choose another.");
   if (!usable(face)) throw new Error("This face is not ready yet (still being cut out or classified).");
-  if (mirror && !mirrorAllowedFor(face, await readSettings(dataDir))) throw new Error("Mirroring is not allowed for this face (the shot has text or a logo in it, or the owner switched it off); use it as it is or pick another face.");
+  const settings = await readSettings(dataDir);
+  if (mirror && !mirrorAllowedFor(face, settings)) throw new Error("Mirroring is not allowed for this face (the shot has text or a logo in it, or the owner switched it off); use it as it is or pick another face.");
   const name = faceAssetName(id, mirror);
   const dest = path.join(projectDir, "assets", name);
-  const source = path.join(facesRoot(dataDir), id, "cutout.png");
+  const source = path.join(facesRoot(dataDir), id, faceImageFile(face, settings));
   await fs.mkdir(path.dirname(dest), { recursive: true });
   if (mirror) {
     const sharp = (await import("sharp")).default;
@@ -262,5 +287,5 @@ export async function takeFace(dataDir, projectDir, id, { mirror = false } = {})
   } else {
     await fs.copyFile(source, dest);
   }
-  return { name, id, mirrored: mirror, width: face.cutout.width, height: face.cutout.height, grade: face.quality?.grade ?? null, faceHeightPx: face.quality?.faceHeightPx ?? null };
+  return { name, id, mirrored: mirror, width: face.cutout.width, height: face.cutout.height, grade: face.quality?.grade ?? null, faceHeightPx: face.quality?.faceHeightPx ?? null, retouched: source.endsWith("retouched.png") };
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/index.js";
-import { EXPRESSIONS, GAZES, GESTURES, HEAD_TURNS, type FaceList, type FaceView } from "../api/types.js";
+import { EXPRESSIONS, GAZES, GESTURES, HEAD_TURNS, type FaceList, type FaceSettings, type FaceView } from "../api/types.js";
 import { Icon } from "../brand/Icon.js";
 import { Btn, Spinner } from "../components.js";
 import { errorText } from "../lib.js";
@@ -10,6 +10,8 @@ import { useToast } from "../library/hooks.js";
 const ACCEPT = ["image/png", "image/jpeg", "image/webp"];
 const MAX_BYTES = 40 * 1024 * 1024;
 const STAGE_TEXT: Record<string, string> = { queued: "Waiting to be cut out", cutting: "Cutting out…", classifying: "Claude is labelling…" };
+const retouching = (f: FaceView) => f.retouch.enabled && ["queued", "running"].includes(f.retouch.state);
+const percent = (v: number) => `${Math.round(v * 100)}%`;
 const GRADE_HELP: Record<string, string> = {
   "4k": "4K: survives a 3× export with the face filling half the canvas",
   hd: "HD: fine at 1080p; at 3× it softens if the face is large",
@@ -101,6 +103,19 @@ export function Faces() {
       toast(errorText(e));
     }
   }
+  async function retouchAll() {
+    try {
+      const r = await api.retouchFaces();
+      toast(r.changed.length ? `Retouching ${r.changed.length} photo${r.changed.length === 1 ? "" : "s"}…` : "Nothing to retouch (faces switched off or not cut out yet).");
+      await refresh();
+    } catch (e) {
+      toast(errorText(e));
+    }
+  }
+  const setSettings = (s: Partial<FaceSettings>) => {
+    if (list) setList({ ...list, settings: { ...list.settings, ...s } });
+    return api.setFaceSettings(s).then(refresh).catch((err) => toast(errorText(err)));
+  };
   async function reclassify(ids?: string[]) {
     try {
       const r = await api.reclassifyFaces(ids);
@@ -175,8 +190,7 @@ export function Faces() {
             checked={list.settings.mirrorAll}
             onChange={(e) => {
               const mirrorAll = e.target.checked;
-              setList({ ...list, settings: { mirrorAll } });
-              api.setFaceSettings({ mirrorAll }).then(refresh).catch((err) => toast(errorText(err)));
+              void setSettings({ mirrorAll });
             }}
           />
           <span>
@@ -186,6 +200,33 @@ export function Faces() {
             </span>
           </span>
         </label>
+      )}
+
+      {list && (
+        <div className="faces-retouch">
+          <label className="faces-mirror">
+            <input type="checkbox" checked={list.settings.retouchAll} onChange={(e) => void setSettings({ retouchAll: e.target.checked })} />
+            <span>
+              <strong>Retouch faces.</strong>{" "}
+              <span className="muted">
+                {list.settings.retouchAll
+                  ? "Designs get a balanced, brightened, lightly smoothed and sharpened version of each face (done on this computer; your photo is never changed). You can switch it off per face."
+                  : "Off: designs get the plain cut-out. You can still switch it on per face."}
+              </span>
+            </span>
+          </label>
+          <div className="faces-retouch-row">
+            <StrengthSlider label="Strength" value={list.settings.retouchStrength} onCommit={(v) => void setSettings({ retouchStrength: v })} />
+            <Btn
+              icon="refresh"
+              disabled={list.counts.retouching > 0}
+              onClick={() => void retouchAll()}
+              title="Redo the retouch of every face at the strength shown (faces you switched off are left as they are)"
+            >
+              {list.counts.retouching > 0 ? `Retouching ${list.counts.retouching}…` : "Retouch all"}
+            </Btn>
+          </div>
+        </div>
       )}
 
       {list && total === 0 && !uploading && (
@@ -233,6 +274,9 @@ export function Faces() {
           f={editFace}
           mirrorAll={list?.settings.mirrorAll ?? true}
           onClose={() => setEditing(null)}
+          packRetouch={list?.settings.retouchAll ?? true}
+          packStrength={list?.settings.retouchStrength ?? 0.5}
+          onRetouch={(body) => patch(editFace.id, body)}
           onSave={(labels, mirrorAllowed) => patch(editFace.id, { labels, mirrorAllowed }).then(() => setEditing(null))}
           onDelete={() => void remove(editFace)}
           onReclassify={() => void reclassify([editFace.id]).then(() => setEditing(null))}
@@ -260,11 +304,23 @@ function FaceTile({ f, onOpen, onStar, onHide, onDelete }: { f: FaceView; onOpen
   return (
     <li className={`face-card ${f.hidden ? "is-hidden" : ""}`}>
       <button type="button" className="face-pic" onClick={onOpen} aria-label={`Edit ${f.filename}`}>
-        {f.cutout.thumbUrl ? <img src={f.cutout.thumbUrl} alt="" loading="lazy" /> : <img className="face-raw" src={f.original.url} alt="" loading="lazy" />}
+        {f.retouch.enabled && f.retouch.thumbUrl ? (
+          <img src={f.retouch.thumbUrl} alt="" loading="lazy" />
+        ) : f.cutout.thumbUrl ? (
+          <img src={f.cutout.thumbUrl} alt="" loading="lazy" />
+        ) : (
+          <img className="face-raw" src={f.original.url} alt="" loading="lazy" />
+        )}
         {busy && (
           <span className="face-busy">
             <Spinner label={STAGE_TEXT[f.stage]} />
             {STAGE_TEXT[f.stage]}
+          </span>
+        )}
+        {!busy && retouching(f) && (
+          <span className="face-busy">
+            <Spinner label="Retouching" />
+            Retouching…
           </span>
         )}
         {f.stage === "failed" && <span className="face-busy is-bad">Cut-out failed</span>}
@@ -302,9 +358,12 @@ function FaceTile({ f, onOpen, onStar, onHide, onDelete }: { f: FaceView; onOpen
   );
 }
 
-function EditFace({ f, mirrorAll, onClose, onSave, onDelete, onReclassify, onRecut }: {
+function EditFace({ f, mirrorAll, packRetouch, packStrength, onRetouch, onClose, onSave, onDelete, onReclassify, onRecut }: {
   f: FaceView;
   mirrorAll: boolean;
+  packRetouch: boolean;
+  packStrength: number;
+  onRetouch: (body: { retouch?: boolean | null; retouchStrength?: number | null }) => Promise<unknown>;
   onClose: () => void;
   onSave: (labels: NonNullable<FaceView["labels"]>, mirror: boolean | null) => Promise<void>;
   onDelete: () => void;
@@ -322,7 +381,7 @@ function EditFace({ f, mirrorAll, onClose, onSave, onDelete, onReclassify, onRec
     <Dialog title="This photo" onClose={onClose}>
       <div className="face-edit">
         <div className="face-edit-pic">
-          <img src={f.cutout.url ?? f.original.url} alt="" />
+          <Compare before={f.cutout.url ?? f.original.url} after={f.retouch.url} busy={retouching(f)} />
           <p className="muted small mono">
             {f.original.width} × {f.original.height}
             {f.quality ? ` · face ${f.quality.faceHeightPx} px · ${f.quality.grade.toUpperCase()}${f.quality.sharpness !== null ? ` · sharpness ${f.quality.sharpness}` : ""}` : ""}
@@ -350,6 +409,36 @@ function EditFace({ f, mirrorAll, onClose, onSave, onDelete, onReclassify, onRec
           <Sel label="Head turn" value={labels.headTurn} options={HEAD_TURNS} onChange={(v) => set("headTurn", v)} />
           <label className="check"><input type="checkbox" checked={labels.eyesOpen} onChange={(e) => set("eyesOpen", e.target.checked)} /> Eyes open</label>
           <label className="check"><input type="checkbox" checked={labels.textOrLogoInShot} onChange={(e) => set("textOrLogoInShot", e.target.checked)} /> Text or a logo in the shot</label>
+          <fieldset className="face-retouch-edit">
+            <legend>Retouch</legend>
+            <label className="field">
+              <span>This face</span>
+              <select
+                value={f.retouch.override === null ? "" : f.retouch.override ? "yes" : "no"}
+                onChange={(e) => void onRetouch({ retouch: e.target.value === "" ? null : e.target.value === "yes" })}
+              >
+                <option value="">Follow the pack setting ({packRetouch ? "on" : "off"})</option>
+                <option value="yes">Retouched</option>
+                <option value="no">Plain cut-out</option>
+              </select>
+            </label>
+            <StrengthSlider
+              label="Strength"
+              value={f.retouch.strength}
+              onCommit={(v) => void onRetouch({ retouchStrength: v })}
+              disabled={f.retouch.override === false || (f.retouch.override === null && !packRetouch)}
+            />
+            {f.retouch.ownStrength !== null && (
+              <button type="button" className="btn btn-ghost face-retouch-reset" onClick={() => void onRetouch({ retouchStrength: null })}>
+                Use the pack strength ({percent(packStrength)})
+              </button>
+            )}
+            {f.retouch.state === "failed" && <p className="field-error">{f.retouch.error}</p>}
+            <p className="muted small">
+              Tone and texture only: colour balance, exposure, a little warmth, softer skin, less redness and a light sharpen. Shape and likeness are never changed.
+              {f.retouch.state === "done" && f.retouch.appliedStrength !== null && f.retouch.appliedStrength !== f.retouch.strength ? " The picture is being redone at this strength." : ""}
+            </p>
+          </fieldset>
           <label className="field">
             <span>Mirroring</span>
             <select value={mirror} onChange={(e) => setMirror(e.target.value as "" | "yes" | "no")}>
@@ -382,6 +471,60 @@ function EditFace({ f, mirrorAll, onClose, onSave, onDelete, onReclassify, onRec
         </Btn>
       </div>
     </Dialog>
+  );
+}
+
+/** A range that reports its value once it is released, so dragging does not queue a retouch per step. */
+function StrengthSlider({ label, value, onCommit, disabled }: { label: string; value: number; onCommit: (v: number) => void; disabled?: boolean }) {
+  const [draft, setDraft] = useState<number | null>(null);
+  const shown = draft ?? value;
+  const commit = () => {
+    if (draft !== null && Math.abs(draft - value) > 0.001) onCommit(draft);
+    setDraft(null);
+  };
+  return (
+    <label className="field strength">
+      <span>
+        {label}: <strong>{percent(shown)}</strong>
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={5}
+        value={Math.round(shown * 100)}
+        disabled={disabled}
+        aria-valuetext={percent(shown)}
+        onChange={(e) => setDraft(Number(e.target.value) / 100)}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+      />
+    </label>
+  );
+}
+
+/** Before and after in one frame: drag the handle to reveal the retouched face over the plain cut-out. */
+function Compare({ before, after, busy }: { before: string; after: string | null; busy: boolean }) {
+  const [at, setAt] = useState(50);
+  if (!after) {
+    return (
+      <div className="compare">
+        <img src={before} alt="" />
+        {busy && <span className="face-busy"><Spinner label="Retouching" />Retouching…</span>}
+      </div>
+    );
+  }
+  return (
+    <div className="compare">
+      <img src={before} alt="Before: the plain cut-out" />
+      <img className="compare-after" src={after} alt="After: retouched" style={{ clipPath: `inset(0 0 0 ${at}%)` }} />
+      <span className="compare-tag is-before">Before</span>
+      <span className="compare-tag is-after">After</span>
+      <span className="compare-line" style={{ left: `${at}%` }} aria-hidden="true" />
+      <input type="range" min={0} max={100} value={at} aria-label="Compare before and after" onChange={(e) => setAt(Number(e.target.value))} />
+      {busy && <span className="face-busy"><Spinner label="Retouching" />Redoing…</span>}
+    </div>
   );
 }
 

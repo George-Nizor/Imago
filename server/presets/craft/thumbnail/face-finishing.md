@@ -34,6 +34,12 @@ whether or not the pack has anything in it; an empty pack says so).
   toward the left edge.
 - `use_face({id, mirror?})` puts the cut-out in `assets/` as `face-<id>.png` (or
   `face-<id>-mirrored.png`, really flipped), ready to place. Look at the result before relying on it.
+  **Pack faces arrive retouched** (unless the owner switched it off for that face): the colour cast is
+  corrected, the exposure lifted, skin softened and the whole subject lightly sharpened, all on the
+  owner's machine and without changing the face's shape. Do not redo that work. Put no heavy
+  `brightness()`, `contrast()`, `saturate()` or `blur()` on them (see "Lifting the face"); a pack face needs
+  only a light grade to sit in the scene (a hue or a little brightness within about 5%), the sticker
+  outline and the rim light.
 
 When to use it: the face source is `pack` (the owner chose their pack's best quality; the video's face frames
 were not imported), the concept names a pack face, or the video has no better real frame of a person. With
@@ -61,7 +67,9 @@ specific moment, result or reaction the video did not capture is not.
 
 ## Lifting the face
 
-Apply these on the face image itself, then judge:
+A face from the pack is already lifted: skip this section for it, or use at most
+`filter: brightness(1.03) saturate(1.03)` to match the scene. This section is for a kit frame, a
+`cut_out` of an upload, or a pack face the owner kept plain. Apply these on the face image itself, then judge:
 
 ```css
 .face { filter: brightness(1.08) contrast(1.12) saturate(1.12); }

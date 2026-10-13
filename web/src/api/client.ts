@@ -172,5 +172,6 @@ export const realApi: Api = {
   reclassifyFaces: (ids) => call("/api/faces/reclassify", json("POST", ids ? { ids } : {})),
   recutFace: (id) => call(`/api/faces/${enc(id)}/recut`, json("POST", {})),
   setFaceSettings: (settings) => call("/api/faces/settings", json("PUT", settings)),
+  retouchFaces: (ids) => call("/api/faces/retouch", json("POST", ids ? { ids } : {})),
   platformExport: (id, platforms) => call(`/api/projects/${enc(id)}/platform-export`, json("POST", platforms ? { platforms } : {})),
 };
