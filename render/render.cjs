@@ -216,18 +216,18 @@ const paintedFrame = (contents) =>
       contents.removeListener("paint", done);
       resolve();
     };
-    const timer = setTimeout(done, 1500);
+    const timer = setTimeout(done, 200);
     contents.on("paint", done);
     contents.invalidate();
   });
 
-async function settledCapture(contents, rect, attempts = 8) {
+async function settledCapture(contents, rect, attempts = 5) {
   let previous = null;
   let image = null;
   for (let i = 0; i < attempts; i += 1) {
     await nextFrames(contents);
     await paintedFrame(contents);
-    await new Promise((r) => setTimeout(r, i === 0 ? 120 : 60));
+    await new Promise((r) => setTimeout(r, i === 0 ? 80 : 40));
     image = rect ? await contents.capturePage(rect) : await contents.capturePage();
     const bitmap = image.toBitmap();
     if (previous && bitmap.equals(previous)) return image;
