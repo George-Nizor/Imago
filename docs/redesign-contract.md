@@ -53,8 +53,8 @@ Scripts: `npm start` (server), `npm run dev` (server and Vite together, Vite pro
 - `PORT` comes from the environment (default `49321`). The server always binds `127.0.0.1`; there is
   no `HOST` setting. Never listen on anything but loopback.
 - `IMAGO_WEB_ROOT` is the built UI, `web/dist` by default, resolved against the package root.
-- `IMAGO_DATA_DIR` holds the projects (`projects/`), `series.json`, the concept sets (`concept-sets/`), the face pack (`faces/`), the brands (`brands/`) and the trash (`projects/.trash/`), `~/.local/share/imago` by default.
-- `IMAGO_CLAUDE_BIN` is `claude` by default. Tests point it at `tests/fixtures/fake-claude.mjs`.
+- `IMAGO_DATA_DIR` holds the projects (`projects/`), `series.json`, the concept sets (`concept-sets/`), the face pack (`faces/`), the brands (`brands/`) and the trash (`projects/.trash/`), `%LOCALAPPDATA%\Imago` by default on Windows and `~/.local/share/imago` elsewhere. On Windows, when that folder does not exist yet, the first start copies `~/.local/share/imago` from WSL (`server/migrate-wsl.mjs`); every request but `/api/health` waits until the copy is done.
+- `IMAGO_CLAUDE_BIN` is `claude` by default. On Windows `server/claude-bin.mjs` finds `claude.exe` (never a `.cmd` shim): `IMAGO_CLAUDE_BIN`, `%USERPROFILE%\.local\bin\claude.exe`, PATH, then npm's `@anthropic-ai/claude-code\bin\claude.exe`. Tests point it at `tests/fixtures/fake-claude.mjs`.
 - `IMAGO_MODEL` defaults to `claude-sonnet-5-5`. `IMAGO_EFFORT` defaults to `medium`.
 - `IMAGO_FACES_MODEL` defaults to `claude-haiku-5-5`: the model of the face pack's classification turn (always `--effort low`).
 - `IMAGO_FURTHER_MODELS` defaults to `opus=claude-opus-5-5,fable=claude-fable-5-1`: the models a

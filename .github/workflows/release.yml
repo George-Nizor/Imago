@@ -70,7 +70,7 @@ jobs:
         run: |
           node .instrumenta/scripts/instrumenta-release.cjs --product imago --version "$VERSION" \
             --strategy managed-service --bundle ".release/imago-$VERSION.zip" \
-            --service-root ".release/imago-$VERSION" --minimum 0.15.0 --out .release/instrumenta-release.json
+            --service-root ".release/imago-$VERSION" --minimum 0.16.0 --out .release/instrumenta-release.json
 
       - name: Publish
         if: github.ref_type == 'tag'

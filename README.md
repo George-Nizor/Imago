@@ -39,12 +39,12 @@ npm start         # server on http://127.0.0.1:49321
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `PORT` | `49321` | Imago listens on `127.0.0.1` only. |
-| `IMAGO_DATA_DIR` | `~/.local/share/imago` | Where projects live. |
+| `IMAGO_DATA_DIR` | `%LOCALAPPDATA%\Imago` on Windows, `~/.local/share/imago` elsewhere | Where projects live. |
 | `IMAGO_MODEL` | `claude-sonnet-5-5` | Model passed to `claude`. |
 | `IMAGO_EFFORT` | `medium` | Effort passed to `claude`. |
 | `IMAGO_TURN_TIMEOUT_MS` | `600000` | A turn that runs longer is killed. |
 | `IMAGO_FURTHER_MODELS`, `IMAGO_FURTHER_EFFORT` | `opus=claude-opus-5-5,fable=claude-fable-5-1`, `high` | Models and effort for Take it further. |
-| `IMAGO_CLAUDE_BIN` | `claude` | The Claude Code executable. |
+| `IMAGO_CLAUDE_BIN` | `claude`; on Windows the `claude.exe` found by `server/claude-bin.mjs` | The Claude Code executable. |
 | `IMAGO_FABULA_PROJECTS` | Fabula's projects folder, and a sibling `Fabula/media` | Comma-separated roots searched for Fabula thumbnail kits. |
 | `IMAGO_CONCEPT_CONCURRENCY` | `3` | How many concept design turns run at once. |
 
@@ -109,11 +109,17 @@ Errors fail the render with a message Claude can act on. Warnings render and are
 
 ## In Instrumenta
 
-Imago is a `web-service` product, like Discere. The launcher starts `npm start` from the checkout and
-opens the loopback address in a window. It is not baked into the installer and has no releases of its
-own. To update it, `git pull` in `Imago/`, then prepare it (`npm ci` and `npm run build`; the launcher's
-Prepare does both). Running it through the launcher on Windows, with the service in WSL, is not yet
-verified. The manifest is [`instrumenta/product.json`](instrumenta/product.json).
+Imago is a `managed-service` product, like Discere, and needs Instrumenta 0.16.0 or newer. The
+launcher installs its Windows release, starts the bundled `runtime\node.exe server\index.mjs`, waits
+for `/api/health` and opens the loopback address in a window. Updates arrive the same way. Imago runs
+natively on Windows: it finds `claude.exe` itself (the native installer's
+`%USERPROFILE%\.local\bin`, then PATH, then npm's package) and keeps its data in
+`%LOCALAPPDATA%\Imago`. The first start on Windows copies `~/.local/share/imago` from WSL when
+there is one, and leaves WSL as it was.
+
+Without a release installed, a workspace's checkout runs as a `web-service`, the way it did before:
+`git pull` in `Imago/`, then `npm ci` and `npm run build` (the launcher's Prepare does both). The
+checkout's manifest is [`instrumenta/product.json`](instrumenta/product.json).
 
 ## Architecture
 

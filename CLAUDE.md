@@ -39,6 +39,12 @@ Chromium with `?mock=1`.
 
 ## Gotchas
 
+- **Windows is native.** The release runs on Windows without WSL (`scripts/package-release.mjs`, `.github/workflows/release.yml`).
+  There: `claude.exe` comes from `server/claude-bin.mjs`, a turn's tree is stopped with `taskkill /T`, the renderer gets no Linux
+  switches and pins `force-device-scale-factor` to 1 and resets the window's content size (Windows scales offscreen windows and
+  clamps tall ones), `/fonts/` is matched on the URL (on Windows it resolves to `C:/fonts/`), renames go through `fs-retry.mjs`,
+  and data is `%LOCALAPPDATA%\Imago`, copied once from WSL. Test Windows from a folder made from WSL (`/mnt/c/...`): Windows
+  programs started from a Claude desktop session have new AppData folders redirected into its sandbox.
 - **Chromium libraries on WSL.** Headless Electron needs system libraries that WSL usually lacks.
   `npm install` runs `scripts/postinstall.mjs`, which unpacks them without root into
   `tools/chromium-libs` (git-ignored). Run Electron by hand with
