@@ -404,7 +404,8 @@ test("Try other faces with chosen faces; a design with no pack face is refused",
     assert.equal(set.state, "done");
     const noFace = (await t.api("POST", "/api/projects", { preset: "thumbnail", brief: { title: "x" } })).body;
     await t.api("POST", `/api/projects/${noFace.id}/messages`, { text: "go" });
-    await until(async () => (await getProject(t, noFace.id)).versions.length, (n) => n >= 1);
+    // A version lands before the turn's slot is released; wait for both, or the answer is TURN_RUNNING.
+    await until(async () => getProject(t, noFace.id), (p) => p.versions.length >= 1 && !p.running);
     assert.equal((await t.api("POST", `/api/projects/${noFace.id}/face-variants`, { count: 2 })).body.error.code, "NO_FACE");
   } finally {
     await t.close();
