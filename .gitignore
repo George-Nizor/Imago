@@ -31,3 +31,7 @@ mcp/node_modules/
 mcp/dist/
 mcp/fonts/*.zip
 tools/
+
+# Release staging (scripts/package-release.mjs)
+.release/
+.cache/

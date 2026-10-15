@@ -1,0 +1,92 @@
+name: release
+
+# Tag v<version> to publish the Windows release Instrumenta installs and keeps up to date
+# (managed-service): imago-<version>.zip and the instrumenta-release.json that describes it.
+# Run by hand, it builds, smoke-tests and checks everything but publishes nothing.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release tooling
+        uses: actions/checkout@v4
+        with:
+          repository: George-Nizor/Instrumenta
+          ref: main
+          path: .instrumenta
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Version
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "The tag $GITHUB_REF_NAME does not match package.json's version $version." >&2
+            exit 1
+          fi
+
+      # npm ci on Windows fetches the Windows builds of the native parts: sharp's libvips,
+      # onnxruntime-node's binding and electron.exe.
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package
+        run: node scripts/package-release.mjs
+
+      # The bundle has to start on Windows from its own node.exe with a data folder outside the
+      # version folder, serve the API and the interface, find its Electron, render with its fonts
+      # and cut out a background with its onnxruntime.
+      - name: Smoke test
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          stage=".release/imago-$VERSION"
+          "$stage/runtime/node.exe" scripts/smoke-release.mjs --root "$stage"
+
+      - name: Release manifest
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node .instrumenta/scripts/instrumenta-release.cjs --product imago --version "$VERSION" \
+            --strategy managed-service --bundle ".release/imago-$VERSION.zip" \
+            --service-root ".release/imago-$VERSION" --minimum 0.15.0 --out .release/instrumenta-release.json
+
+      - name: Publish
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" ".release/imago-$VERSION.zip" .release/instrumenta-release.json \
+            --title "Imago $VERSION" --generate-notes --verify-tag
+
+      - name: Keep the build
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: imago-${{ steps.version.outputs.version }}
+          include-hidden-files: true
+          path: |
+            .release/imago-*.zip
+            .release/instrumenta-release.json

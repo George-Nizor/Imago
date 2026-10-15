@@ -144,6 +144,30 @@ The tests never call the real Claude. `tests/fixtures/fake-claude.mjs` stands in
 it writes a design, renders it through the real render MCP and prints stream-json, so no usage is
 spent. Developer notes are in [CLAUDE.md](CLAUDE.md).
 
+## Making a release
+
+A release is a Windows bundle that Instrumenta installs as a `managed-service`, the same way it
+installs Discere. Push a tag `v<version>` that matches `version` in `package.json` and
+[`.github/workflows/release.yml`](.github/workflows/release.yml) runs on a Windows runner. It runs
+`npm ci` and `npm run build`, then `scripts/package-release.mjs`, which stages
+`.release/imago-<version>/` and zips it to `.release/imago-<version>.zip`.
+
+The bundle has a pinned Node in `runtime/node.exe`, plus `server/`, `render/`, `fonts/`, `web/dist`
+and the production `node_modules`. Electron stays in, since every render starts `electron.exe`. Its
+own `instrumenta/product.json` starts `runtime/node.exe server/index.mjs` with `IMAGO_PACKAGED=1`;
+the checkout's manifest is left as it is. `imago-bundle.json` at the root records the Imago, Node and
+Electron versions.
+
+Next, `scripts/smoke-release.mjs` runs on the bundled Node. It starts the server against a temporary
+data folder, checks `/api/health`, the page and the renderer, renders a test page with and without a
+font from `fonts/`, and cuts out a background. Instrumenta's `scripts/instrumenta-release.cjs` then
+writes `instrumenta-release.json`, which asks for Instrumenta 0.15.0 or newer, and the workflow
+publishes it with the zip. If you run the workflow by hand from the Actions tab, it builds and checks
+everything and keeps the zip as a build artifact, but publishes nothing.
+
+`node scripts/package-release.mjs --dry-run` lists what would be staged, on any platform. A real
+bundle has to be staged on Windows, because the native parts are whatever `npm ci` installed there.
+
 ## Licence
 
 Imago is MIT licensed (see [LICENSE](LICENSE)). The content fonts in `fonts/` and the bundled libraries
