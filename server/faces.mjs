@@ -4,6 +4,7 @@
 // concept planner read it through face-pack.mjs.
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { rename } from "./fs-retry.mjs";
 import path from "node:path";
 import { UploadError } from "./assets.mjs";
 import { runFacesClassifier } from "./claude-runner.mjs";
@@ -70,7 +71,7 @@ export function createFaces(ctx) {
       const next = (await fn(face)) ?? face;
       const tmp = `${fileOf(id)}.${randomBytes(3).toString("hex")}.tmp`;
       await fs.writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`);
-      await fs.rename(tmp, fileOf(id));
+      await rename(tmp, fileOf(id));
       return next;
     });
     const tail = run.catch(() => {});
@@ -200,7 +201,7 @@ export function createFaces(ctx) {
       const box = face.labels?.faceBox ?? null;
       const tmp = path.join(dir, "retouched.tmp.png");
       await retouchFile({ cutout: path.join(dir, "cutout.png"), destination: tmp, box, strength });
-      await fs.rename(tmp, path.join(dir, "retouched.png"));
+      await rename(tmp, path.join(dir, "retouched.png"));
       let thumb = false;
       try {
         const sharp = (await import("sharp")).default;
@@ -232,7 +233,7 @@ export function createFaces(ctx) {
       }
       const tmp = path.join(dir, "cutout.tmp.png");
       const made = await cutOutFile(source, tmp);
-      await fs.rename(tmp, path.join(dir, "cutout.png"));
+      await rename(tmp, path.join(dir, "cutout.png"));
       let thumb = false;
       try {
         await sharp(path.join(dir, "cutout.png"), { limitInputPixels: MAX_PIXELS }).resize({ height: THUMB_HEIGHT, fit: "inside", withoutEnlargement: true }).png().toFile(path.join(dir, "thumb.png"));
@@ -426,7 +427,7 @@ export function createFaces(ctx) {
       await fs.mkdir(root, { recursive: true });
       const tmp = path.join(root, `settings.${randomBytes(3).toString("hex")}.tmp`);
       await fs.writeFile(tmp, `${JSON.stringify(next)}\n`);
-      await fs.rename(tmp, path.join(root, "settings.json"));
+      await rename(tmp, path.join(root, "settings.json"));
       // Faces that follow the pack and have never been retouched (or not at this strength) are brought up to date.
       if (next.retouchAll && (current.retouchAll !== next.retouchAll || current.retouchStrength !== next.retouchStrength)) {
         for (const f of await readAllFaces(path.dirname(root))) if (f.retouch == null && f.retouchStrength == null) await ensureRetouched(f.id);
@@ -542,7 +543,7 @@ export function createFaces(ctx) {
       const retouching = retouchQueue.indexOf(id);
       if (retouching >= 0) retouchQueue.splice(retouching, 1);
       await fs.rm(path.join(trashDir, id), { recursive: true, force: true });
-      await fs.rename(dirOf(id), path.join(trashDir, id));
+      await rename(dirOf(id), path.join(trashDir, id));
       await fs.utimes(path.join(trashDir, id), new Date(), new Date()).catch(() => {});
       return { ok: true };
     },
@@ -551,7 +552,7 @@ export function createFaces(ctx) {
       if (!isFaceId(id)) throw new FaceError("BAD_ID", "Invalid face id.");
       const from = path.join(trashDir, id);
       if (!(await fs.stat(from).then((s) => s.isDirectory(), () => false))) throw new FaceError("NOT_FOUND", "That face is not in the trash.", 404);
-      await fs.rename(from, dirOf(id));
+      await rename(from, dirOf(id));
       const face = await read(id);
       if (["queued", "running"].includes(face.cutout?.state)) enqueueCut(id);
       return present(face);

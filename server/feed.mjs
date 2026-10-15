@@ -4,11 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { DECOYS, decoyImage, feedBody } from "./feed-markup.mjs";
 import { isProjectId } from "./paths.mjs";
 
 const { rgbToLab } = createRequire(import.meta.url)("../render/measure.cjs");
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NEIGHBOUR_LIMIT = 8;
 const MIN_NEIGHBOURS = 6;
 const SCAN_LIMIT = 60; // project folders read, newest folders first

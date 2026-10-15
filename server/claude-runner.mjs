@@ -64,7 +64,11 @@ export function mcpConfig(config, project, projectDir) {
     IMAGO_CONCEPT_SET: typeof project.conceptSet?.id === "string" ? project.conceptSet.id : "",
   };
   // The MCP process is spawned by Claude with a trimmed environment; it needs the display hints.
-  for (const key of ["DISPLAY", "WAYLAND_DISPLAY", "LD_LIBRARY_PATH", "HOME"]) if (process.env[key]) env[key] = process.env[key];
+  // On Windows node.exe and Electron need the profile, temp and system folders to start at all.
+  const keys = process.platform === "win32"
+    ? ["USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "PATH", "Path"]
+    : ["DISPLAY", "WAYLAND_DISPLAY", "LD_LIBRARY_PATH", "HOME"];
+  for (const key of keys) if (process.env[key]) env[key] = process.env[key];
   return { mcpServers: { imago: { command: process.execPath, args: [config.mcpScript], env } } };
 }
 

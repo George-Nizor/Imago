@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { bringOverFromWsl } from "./migrate-wsl.mjs";
 import { IMAGE_EXTENSIONS, MAX_UPLOAD_BYTES, UploadError, creditsFor, registerCutout, saveUpload } from "./assets.mjs";
 import { createCapabilities } from "./capabilities.mjs";
 import { FURTHER_DIRECTION, runTurn } from "./claude-runner.mjs";
@@ -971,9 +972,13 @@ export function createServer(config = loadConfig(), deps = {}) {
     });
   }
 
+  // Settles once the data is ready (brought over from WSL, recovered); until then every request but
+  // the health check waits, so the launcher sees the service up while a first copy is still running.
+  let ready = Promise.resolve();
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
+      if (url.pathname !== "/api/health") await ready;
       // Loopback only: refuse requests that reach us under another name (DNS rebinding).
       const host = (req.headers.host ?? "").replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
       if (!["127.0.0.1", "localhost", "::1"].includes(host)) throw new HttpError(403, "FORBIDDEN_HOST", "Only loopback hosts are served.");
@@ -1027,14 +1032,20 @@ export function createServer(config = loadConfig(), deps = {}) {
     config,
     capabilities,
     async listen(port = config.port, host = config.host) {
-      await store.clearStaleRunning();
-      await sets.recover();
-      await faces.recover();
-      await store.purgeTrash().catch(() => {});
+      ready = (async () => {
+        await deps.beforeReady?.();
+        await store.clearStaleRunning();
+        await sets.recover();
+        await faces.recover();
+        await store.purgeTrash().catch(() => {});
+      })();
+      // A failure here is a startup failure, as it was before the server listened first.
+      ready.catch(() => {});
       await new Promise((resolve, reject) => {
         server.once("error", reject);
         server.listen(port, host, resolve);
       });
+      if (!deps.beforeReady) await ready;
       return server.address().port;
     },
     async close() {
@@ -1059,8 +1070,16 @@ function decodeHeader(value) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const app = createServer();
+// Run as a program, not imported. Compared as paths: on Windows the drive letter's case in argv
+// need not match the module URL's.
+const invoked = process.argv[1] && path.resolve(fileURLToPath(import.meta.url)).toLowerCase() === path.resolve(process.argv[1]).toLowerCase();
+if (invoked) {
+  const config = loadConfig();
+  // The first start on Windows brings the WSL data across, unless a data folder was named.
+  const beforeReady = process.platform === "win32" && !process.env.IMAGO_DATA_DIR?.trim()
+    ? () => bringOverFromWsl({ to: config.dataDir })
+    : undefined;
+  const app = createServer(config, { beforeReady });
   const port = await app.listen();
   console.log(`Imago listening on http://${app.config.host}:${port}`);
   const stop = () => app.close().finally(() => process.exit(0));

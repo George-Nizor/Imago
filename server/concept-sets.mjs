@@ -3,6 +3,7 @@
 // concept runs in its own project, in parallel up to IMAGO_CONCEPT_CONCURRENCY.
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { rename } from "./fs-retry.mjs";
 import path from "node:path";
 import { registerCutout, registerFace } from "./assets.mjs";
 import { BRAND_ASSET_PREFIX, copySnapshotFiles, readSnapshot } from "./brands.mjs";
@@ -230,7 +231,7 @@ export function createConceptSets(ctx) {
       set.updatedAt = new Date().toISOString();
       const tmp = `${fileOf(id)}.${randomBytes(4).toString("hex")}.tmp`;
       await fs.writeFile(tmp, `${JSON.stringify(set, null, 2)}\n`);
-      await fs.rename(tmp, fileOf(id));
+      await rename(tmp, fileOf(id));
       scheduleEmit(id);
       return set;
     });

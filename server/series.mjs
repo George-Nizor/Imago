@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { rename } from "./fs-retry.mjs";
 import path from "node:path";
 import { isProjectId } from "./paths.mjs";
 
@@ -44,7 +45,7 @@ export function createSeriesStore(dataDir) {
       await fs.mkdir(dataDir, { recursive: true });
       const tmp = `${file}.${randomBytes(4).toString("hex")}.tmp`;
       await fs.writeFile(tmp, `${JSON.stringify(list, null, 2)}\n`);
-      await fs.rename(tmp, file);
+      await rename(tmp, file);
       return result;
     });
     queue = run.catch(() => {});

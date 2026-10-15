@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runProcess } from "./process.mjs";
+import { rename } from "./fs-retry.mjs";
 
 /** Environment for Electron: a clean node-less env plus the optional no-sudo library directory. */
 export function electronEnv(config, base = process.env) {
@@ -10,10 +11,12 @@ export function electronEnv(config, base = process.env) {
   return env;
 }
 
-export function electronFlags() {
+export function electronFlags(platform = process.platform) {
+  // Windows has no zygote and no /dev/shm; those switches are for Linux and WSL.
+  if (platform === "win32") return ["--no-sandbox", "--disable-gpu"];
   const flags = ["--no-sandbox", "--no-zygote", "--disable-gpu", "--disable-dev-shm-usage"];
   // Chromium picks its platform before any script runs, so headless has to be on the command line.
-  if (process.platform === "linux") flags.push("--ozone-platform=headless");
+  if (platform === "linux") flags.push("--ozone-platform=headless");
   return flags;
 }
 
@@ -92,7 +95,7 @@ export async function renderExport(config, options, reference) {
     const again = await renderHtml(config, { ...options, out: retry });
     const d = await differenceFrom(retry, reference).catch(() => Infinity);
     if (d < difference) {
-      await fs.promises.rename(retry, options.out);
+      await rename(retry, options.out);
       result = again;
       difference = d;
     } else await fs.promises.rm(retry, { force: true });

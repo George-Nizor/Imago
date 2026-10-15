@@ -21,10 +21,14 @@ const { pathToFileURL, fileURLToPath } = require("node:url");
 const { domMeasure } = require("./dom-measure.cjs");
 const { backdropLuminance, pixelStats } = require("./measure.cjs");
 
-if (!app.commandLine.hasSwitch("no-zygote")) {
+// Linux needs no-zygote (the zygote forks fail inside a sandboxless WSL); Windows has no zygote.
+if (process.platform !== "win32" && !app.commandLine.hasSwitch("no-zygote")) {
   console.error("run with --no-sandbox --no-zygote");
   app.exit(2);
 }
+// Windows lays offscreen windows out at the display's scaling (175% makes a 1280 px design 731 CSS
+// px wide); a render is in CSS px at the scale asked for, so the device scale is pinned to 1.
+app.commandLine.appendSwitch("force-device-scale-factor", "1");
 // Nothing is shown. Without a display Chromium must be told on the command line to go headless
 // (the ozone switch is also passed by the caller); this covers the in-process case.
 app.commandLine.appendSwitch("disable-gpu");
@@ -32,7 +36,7 @@ app.commandLine.appendSwitch("disable-gpu");
 // ("checker-imaging"); offscreen, the re-raster sometimes never lands, and a banner came back with
 // its face missing. Decode synchronously into the raster instead.
 app.commandLine.appendSwitch("disable-checker-imaging");
-if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch("ozone-platform", "headless");
+if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch("ozone-platform", "headless");
 
 // Closing the design window before the feed one opens must not end the process.
 app.on("window-all-closed", () => {});
@@ -62,6 +66,13 @@ const JPEG_FLOOR = 40;
 // validator missed still cannot run. Fonts and images come from file: (the project and /fonts/).
 const DESIGN_CSP = "default-src 'none'; img-src file: data:; style-src 'unsafe-inline' file:; font-src file: data:; base-uri 'none'; form-action 'none'";
 
+// Windows clamps a new window to the screen's work area, so a 1080x1920 design would be laid out in
+// a shorter window; offscreen, the size can be set again after creation and is then kept.
+function fullSize(win, w, h) {
+  const [cw, ch] = win.getContentSize();
+  if (cw !== w || ch !== h) win.setContentSize(w, h);
+}
+
 function fail(message, code = 1) {
   console.error(message);
   app.exit(code);
@@ -79,8 +90,15 @@ function resolveRequest(url) {
   } catch {
     return null;
   }
-  const normalized = target.split(path.sep).join("/");
-  if (normalized.startsWith("/fonts/")) target = path.join(fontsDir, normalized.slice("/fonts/".length));
+  // /fonts/ is matched on the URL, not the file path: on Windows /fonts/x inside
+  // file:///C:/.../design.html is file:///C:/fonts/x, so the path would be C:\fonts\x.
+  let pathname = "";
+  try {
+    pathname = decodeURIComponent(new URL(url).pathname).replace(/^\/[A-Za-z]:(?=\/)/, "");
+  } catch {
+    return null;
+  }
+  if (pathname.startsWith("/fonts/")) target = path.join(fontsDir, ...pathname.slice("/fonts/".length).split("/"));
   let real;
   try {
     real = fs.realpathSync(target);
@@ -121,6 +139,7 @@ async function main() {
     backgroundColor: format === "png" ? "#00000000" : "#ffffffff",
     webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, backgroundThrottling: false, webSecurity: true, disableBlinkFeatures: "WebRTC" },
   });
+  fullSize(win, Math.round(width * scale), Math.round(height * scale));
   const contents = win.webContents;
   contents.setWindowOpenHandler(() => ({ action: "deny" }));
   contents.on("will-navigate", (event) => event.preventDefault());
@@ -277,6 +296,7 @@ async function renderFeed(job) {
     backgroundColor: "#ffffffff",
     webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, backgroundThrottling: false, webSecurity: true, disableBlinkFeatures: "WebRTC" },
   });
+  fullSize(win, job.width, 4000);
   const contents = win.webContents;
   contents.setWindowOpenHandler(() => ({ action: "deny" }));
   contents.on("will-navigate", (event) => event.preventDefault());

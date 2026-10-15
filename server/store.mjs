@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { rename } from "./fs-retry.mjs";
 import path from "node:path";
 import { isProjectId } from "./paths.mjs";
 
@@ -51,7 +52,7 @@ export function createStore(projectsDir) {
     const file = fileOf(project.id);
     const tmp = `${file}.${randomBytes(4).toString("hex")}.tmp`;
     await fs.writeFile(tmp, `${JSON.stringify(project, null, 2)}\n`);
-    await fs.rename(tmp, file);
+    await rename(tmp, file);
   }
 
   /** Read-modify-write one project under its queue; `fn` may mutate and/or return a replacement. */
@@ -235,7 +236,7 @@ export function createStore(projectsDir) {
     await fs.mkdir(trashDir, { recursive: true });
     const dest = path.join(trashDir, id);
     await fs.rm(dest, { recursive: true, force: true });
-    await fs.rename(dirOf(id), dest);
+    await rename(dirOf(id), dest);
     await fs.writeFile(path.join(trashDir, `${id}.json`), JSON.stringify({ deletedAt: new Date().toISOString() }));
     summaryCache.delete(id);
   }
@@ -247,7 +248,7 @@ export function createStore(projectsDir) {
     try {
       await fs.access(from);
       await fs.access(dirOf(id)).then(() => Promise.reject(new StoreError("EXISTS", "That id is in use.", 409)), () => {});
-      await fs.rename(from, dirOf(id));
+      await rename(from, dirOf(id));
     } catch {
       return false;
     }

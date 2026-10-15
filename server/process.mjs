@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const MAX_TAIL = 4_000;
 
@@ -10,8 +10,14 @@ export class SpawnError extends Error {
   }
 }
 
+/** Ends a Windows process and everything it started (Claude's MCP server, its renderers). */
+function killTree(pid) {
+  spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+}
+
 /**
  * Runs a child with its own process group, so a timeout or cancel reaches whatever it started.
+ * Windows has no process groups: there the child's tree is ended with taskkill, at once.
  * stdout is delivered line by line as it arrives (stream-json is parsed incrementally).
  * Resolves with how it ended; rejects only when the program cannot be started.
  */
@@ -29,7 +35,8 @@ export function runProcess({
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return resolve({ code: null, signal: null, timedOut: false, aborted: true, stderr: "" });
     const detached = process.platform !== "win32";
-    const child = spawn(binary, args, { cwd, env, detached, stdio: ["pipe", "pipe", "pipe"] });
+    const windows = process.platform === "win32";
+    const child = spawn(binary, args, { cwd, env, detached, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     let stderr = "";
     let pending = "";
     let settled = false;
@@ -39,7 +46,8 @@ export function runProcess({
 
     const stop = (sig) => {
       try {
-        if (detached && child.pid !== undefined) process.kill(-child.pid, sig);
+        if (windows && child.pid !== undefined) killTree(child.pid);
+        else if (detached && child.pid !== undefined) process.kill(-child.pid, sig);
         else child.kill(sig);
       } catch {
         // Already gone.

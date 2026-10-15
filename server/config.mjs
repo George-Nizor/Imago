@@ -3,15 +3,40 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
+import { claudeBin } from "./claude-bin.mjs";
 
-/** Where Fabula keeps projects (comma separated in IMAGO_FABULA_PROJECTS), else its default place and a sibling checkout's media. */
-export function fabulaRoots(env = process.env) {
+/** %LOCALAPPDATA% on Windows (where Imago keeps its data and Fabula its engine). */
+function localAppData(env) {
+  return env.LOCALAPPDATA || path.join(homedir(), "AppData", "Local");
+}
+
+/**
+ * Where Fabula keeps projects (comma separated in IMAGO_FABULA_PROJECTS), else its default place and a sibling checkout's media.
+ * On Windows that is the folder Fabula's own settings name (%LOCALAPPDATA%\Fabula\engine\settings.json), else Videos\Fabula.
+ */
+export function fabulaRoots(env = process.env, platform = process.platform) {
   const given = String(env.IMAGO_FABULA_PROJECTS ?? "").split(",").map((r) => r.trim()).filter(Boolean);
   if (given.length) return given.map((r) => path.resolve(r));
-  const roots = [path.join(homedir(), ".local", "share", "fabula", "projects")];
+  const roots = platform === "win32" ? [windowsFabulaProjects(env)] : [path.join(homedir(), ".local", "share", "fabula", "projects")];
   const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "Fabula", "media");
   if (existsSync(checkout)) roots.push(checkout);
   return roots;
+}
+
+function windowsFabulaProjects(env) {
+  try {
+    const settings = JSON.parse(readFileSync(path.join(localAppData(env), "Fabula", "engine", "settings.json"), "utf8"));
+    if (typeof settings.projectsRoot === "string" && path.win32.isAbsolute(settings.projectsRoot)) return settings.projectsRoot;
+  } catch {
+    // No Fabula on this machine, or its default folder.
+  }
+  return path.join(env.USERPROFILE || homedir(), "Videos", "Fabula");
+}
+
+/** Imago's own data: IMAGO_DATA_DIR, else %LOCALAPPDATA%\Imago on Windows and ~/.local/share/imago elsewhere. */
+export function defaultDataDir(env = process.env, platform = process.platform) {
+  if (env.IMAGO_DATA_DIR?.trim()) return path.resolve(env.IMAGO_DATA_DIR.trim());
+  return platform === "win32" ? path.join(localAppData(env), "Imago") : path.join(homedir(), ".local", "share", "imago");
 }
 
 export const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -57,10 +82,9 @@ export function loadConfig(env = process.env, overrides = {}) {
     host: "127.0.0.1",
     port: num(env.PORT, 49321),
     webRoot: path.resolve(PACKAGE_ROOT, env.IMAGO_WEB_ROOT?.trim() || "web/dist"),
-    dataDir: path.resolve(env.IMAGO_DATA_DIR?.trim() || path.join(homedir(), ".local", "share", "imago")),
+    dataDir: defaultDataDir(env),
     fontsDir: path.join(PACKAGE_ROOT, "fonts"),
-    // Turns run with the project as cwd, so a relative path would resolve there; pin it to ours.
-    claudeBin: resolveBin(env.IMAGO_CLAUDE_BIN?.trim() || "claude"),
+    claudeBin: claudeBin(env),
     model: env.IMAGO_MODEL?.trim() || "claude-sonnet-5-5",
     effort: env.IMAGO_EFFORT?.trim() || "medium",
     furtherModels: parseFurtherModels(env.IMAGO_FURTHER_MODELS?.trim() || DEFAULT_FURTHER_MODELS),
@@ -85,8 +109,4 @@ export function loadConfig(env = process.env, overrides = {}) {
   config.projectsDir = path.join(config.dataDir, "projects");
   config.facesDir = path.join(config.dataDir, "faces");
   return config;
-}
-
-function resolveBin(bin) {
-  return bin.includes("/") && !path.isAbsolute(bin) ? path.resolve(bin) : bin;
 }

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { rename } from "./fs-retry.mjs";
 import path from "node:path";
 import { UploadError, isImageName, writeUnique } from "./assets.mjs";
 import { EXTENSION, MAX_PIXELS, imageInfo, tooManyPixels } from "./image-info.mjs";
@@ -169,7 +170,7 @@ export function createBrands({ config }) {
       await fs.mkdir(root, { recursive: true });
       const tmp = `${file}.${randomBytes(4).toString("hex")}.tmp`;
       await fs.writeFile(tmp, `${JSON.stringify({ schemaVersion: 1, brands: list }, null, 2)}\n`);
-      await fs.rename(tmp, file);
+      await rename(tmp, file);
       return result;
     });
     queue = run.catch(() => {});
@@ -339,7 +340,7 @@ async function writeJsonAtomic(target, value) {
   await fs.mkdir(path.dirname(target), { recursive: true });
   const tmp = `${target}.${randomBytes(4).toString("hex")}.tmp`;
   await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`);
-  await fs.rename(tmp, target);
+  await rename(tmp, target);
 }
 
 /** The snapshot in a project (or planner) folder, or null when there is none or it is unreadable. */

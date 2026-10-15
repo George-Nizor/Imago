@@ -4,6 +4,7 @@
 // smoothing, redness reduction and a light unsharp mask. Everything is plain typed-array maths on top of
 // sharp's decode and encode, so it needs no model and no subscription.
 import fs from "node:fs/promises";
+import { rename } from "./fs-retry.mjs";
 
 export const DEFAULT_RETOUCH_STRENGTH = 0.5;
 export const ALL_STEPS = ["balance", "tone", "warmth", "smooth", "redness", "blemish", "teeth", "sharpen"];
@@ -735,6 +736,6 @@ export async function retouchFile({ cutout, destination, box = null, strength = 
   const { data, report } = retouchPixels({ rgba: cut.data, channels: 4, width, height, box, strength, steps });
   const tmp = `${destination}.tmp`;
   await sharp(data, { raw: { width, height, channels: 4 } }).png({ compressionLevel: 4 }).toFile(tmp);
-  await fs.rename(tmp, destination);
+  await rename(tmp, destination);
   return { width, height, report };
 }
