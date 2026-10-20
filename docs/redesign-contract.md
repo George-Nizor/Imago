@@ -868,6 +868,10 @@ visible focus.
 
 The workspace toolbar has **Try other faces** (thumbnails with a pack face) and the Export popover leads with a one-click export; a bar offers **Refresh faces** when the pack's copy is newer, and the project's exports are listed under the preview (see "Faces inside a project" and "Exports").
 
+The chat has **Add images** above the message box, for images wanted after the project was made (a logo, a screenshot). It
+uploads each file through `POST /api/projects/:id/assets` and says which were added; the next turn's prompt lists them
+under "Assets", so the owner says in that message how to use them. It is disabled while a turn runs.
+
 Routes: `/` (start: the three presets and the latest eight projects, "View all"), `/library`, `/faces` (the face pack), `/brands` (see Brands),
 `/new/<preset>` (`?style=<project id>` for "New in this style"), `/p/<id>`, `/c/<set id>` (the compare screen). The library searches by
 title and brief, filters by preset, series and starred, sorts four ways, loads 40 at a time, and has a

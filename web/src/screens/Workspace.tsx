@@ -135,6 +135,7 @@ export function Workspace({ id }: { id: string }) {
           }
         }}
         onStop={() => api.cancel(id).catch(() => {})}
+        onImagesAdded={() => api.getProject(id).then(setProject).catch(() => {})}
       />
     </div>
   );
@@ -448,14 +449,18 @@ function Chat({
   chips,
   onSend,
   onStop,
+  onImagesAdded,
 }: {
   project: Project;
   run: Run;
   chips: string[];
   onSend: (text: string, opts?: { mode?: TurnMode; model?: FurtherModel }) => Promise<void>;
   onStop: () => void;
+  onImagesAdded: () => void;
 }) {
   const [text, setText] = useState("");
+  const [adding, setAdding] = useState<{ busy: boolean; note: string; bad: boolean }>({ busy: false, note: "", bad: false });
+  const picker = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<{ text: string; base: number } | null>(null);
   const end = useRef<HTMLDivElement>(null);
 
@@ -481,6 +486,29 @@ function Chat({
       setPending(null);
       setText(body);
     }
+  }
+
+  // Images added after the project was made: logos, screenshots, a photo. They join assets/ and Claude is
+  // told about them in the asset list of the next turn's prompt.
+  async function addImages(files: File[]) {
+    if (!files.length || adding.busy) return;
+    setAdding({ busy: true, note: "", bad: false });
+    const added: string[] = [];
+    const failed: string[] = [];
+    for (const file of files) {
+      try {
+        added.push((await api.uploadAsset(project.id, file)).name);
+      } catch (e) {
+        failed.push(`${file.name}: ${errorText(e)}`);
+      }
+    }
+    if (added.length) onImagesAdded();
+    const list = added.length > 3 ? `${added.slice(0, 3).join(", ")} and ${added.length - 3} more` : added.join(", ");
+    const note = [
+      added.length ? `Added ${list}. Claude will see ${added.length > 1 ? "them" : "it"} with your next message, so say how to use ${added.length > 1 ? "them" : "it"}.` : "",
+      failed.length ? `Not added: ${failed.join("; ")}` : "",
+    ].filter(Boolean).join(" ");
+    setAdding({ busy: false, note, bad: failed.length > 0 });
   }
 
   const canChip = !run.running && project.versions.length > 0;
@@ -536,6 +564,29 @@ function Chat({
           </div>
         )}
         {canChip && <FurtherBar hasNote={text.trim().length > 0} disabled={run.running} onGo={(model) => void send(text, { mode: "further", model })} />}
+        <div className="add-images">
+          <Btn
+            icon="upload"
+            size={18}
+            disabled={run.running || adding.busy}
+            onClick={() => picker.current?.click()}
+            title="Add images to this project (PNG, JPEG or WebP), such as a logo or a screenshot"
+          >
+            {adding.busy ? "Adding…" : "Add images"}
+          </Btn>
+          <input
+            ref={picker}
+            type="file"
+            hidden
+            multiple
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(e) => {
+              void addImages([...(e.target.files ?? [])]);
+              e.target.value = "";
+            }}
+          />
+          {adding.note && <p className={`small ${adding.bad ? "field-error" : "muted"}`} role="status">{adding.note}</p>}
+        </div>
         <form
           className="composer"
           onSubmit={(e) => {

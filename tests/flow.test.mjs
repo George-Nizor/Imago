@@ -213,3 +213,26 @@ test("thumbnail formats set the canvas; oversized export scales are refused", as
     await t.close();
   }
 });
+
+test("an image added after the first turn is listed to Claude on the next one", { timeout: 240_000 }, async (ctx) => {
+  const t = await startApp();
+  try {
+    const caps = (await t.api("GET", "/api/capabilities")).body;
+    if (caps.renderer.state !== "ready") return ctx.skip(`renderer not ready: ${caps.renderer.reason}`);
+    const id = (await t.api("POST", "/api/projects", { preset: "thumbnail", brief: { title: "Logos later" } })).body.id;
+    const turn = (text) => eventsDuring(t.base, id, async () => assert.equal((await t.api("POST", `/api/projects/${id}/messages`, { text })).status, 202), done);
+    const call = () => JSON.parse(fs.readFileSync(path.join(t.dataDir, "projects", id, "fake-claude-call.json"), "utf8"));
+
+    await turn("First go");
+    assert.doesNotMatch(call().systemPrompt, /assets\/fabula\.png/);
+
+    const upload = await fetch(`${t.base}/api/projects/${id}/assets`, { method: "POST", headers: { "x-filename": "fabula.png" }, body: makePng(512, 512) });
+    assert.equal(upload.status, 201);
+    await turn("Put the Fabula logo top right");
+    const second = call();
+    assert.ok(second.argv.includes("--resume"), "the second turn resumes the session");
+    assert.match(second.systemPrompt, /assets\/fabula\.png \(512×512\)/);
+  } finally {
+    await t.close();
+  }
+});

@@ -235,6 +235,9 @@ input:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent); 
 .chip { font: 500 0.8125rem var(--ui); font-variation-settings: "FLAR" 40; color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 99px; padding: 5px 12px; cursor: pointer; }
 .chip:hover { border-color: var(--accent); background: var(--raised-2); }
 .composer { display: flex; gap: 8px; align-items: flex-end; }
+.add-images { display: flex; gap: 10px; align-items: center; }
+.add-images p { margin: 0; }
+.add-images .btn { flex-shrink: 0; white-space: nowrap; }
 .composer textarea { resize: none; }
 
 @media (max-width: 900px) {
