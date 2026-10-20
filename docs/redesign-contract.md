@@ -561,7 +561,8 @@ count and the first three warnings). A shared surface and theme control. Actions
 (while running), and for 16:9 sets a Test & Compare zip with a tick per concept (at most three). A shorts set has a per-concept
 "Covers" button instead. The Library shows a "Concept N · compare" badge on concept projects, and the workspace toolbar a link
 back to the compare screen. The start form (thumbnails) has "From a Fabula video" (a kit picker with poster, title, date,
-format, which prefills the form), a one design, three concepts or A/B test titles choice with the usage note, and, for the shorts format, a platforms
+format, which prefills the title, colours and notes but never the format: the owner's format stands, with a note when it
+differs from the video's shape), a one design, three concepts or A/B test titles choice with the usage note, and, for the shorts format, a platforms
 multi-select (all three by default).
 
 ### Title A/B sets

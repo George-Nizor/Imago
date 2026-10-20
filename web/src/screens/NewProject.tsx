@@ -76,11 +76,11 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
   function pickKit(k: KitSummary | undefined) {
     setKitId(k?.id ?? "");
     if (!k) return;
-    // The kit suggests; the owner edits.
+    // The kit suggests; the owner edits. The format stays what the owner chose: a kit from a vertical
+    // video must not quietly turn a video thumbnail into a Shorts one (the note under Format says so instead).
     setTitle(k.suggested.title);
     setColours(k.suggested.channelColours);
     setNotes(k.suggested.notes);
-    setFormat(k.suggested.format);
   }
   const asSet = preset === "thumbnail" && !styled && (count > 1 || abTitles !== null);
   const setSize = abTitles ? abTitles.length : count;
@@ -300,6 +300,9 @@ export function NewProject({ preset, style }: { preset: PresetId; style?: string
                     </button>
                   ))}
                 </div>
+                {fromKit && kit && kit.thumbnailFormat !== format && (
+                  <p className="muted small">This Fabula video is {kit.format}. The thumbnail is made at the format chosen here, {THUMBNAIL_FORMATS.find((f) => f.id === format)?.label ?? format}.</p>
+                )}
               </div>}
               {format === "shorts" && !styled && (
                 <div className="field">
